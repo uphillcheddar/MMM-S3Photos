@@ -23,3 +23,8 @@ logs/
 # OS-specific files
 .DS_Store
 Thumbs.db
+
+# sample photos
+cache/*
+!cache/samples/
+!cache/samples/**
