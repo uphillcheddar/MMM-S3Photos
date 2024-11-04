@@ -101,7 +101,7 @@ Example details:
    ```bash
    npm install
    ```
- * run setup script
+ * run setup script - be patient this can take a while (0-10 minutes depending on aws region)
    ```bash
    node ~/MagicMirror/modules/MMM-S3Photos/setup.js
    ```
