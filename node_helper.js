@@ -49,22 +49,10 @@ module.exports = NodeHelper.create({
             this.initializationInProgress = true;
             Log.info('Starting module initialization');
 
-            // Load environment variables
-            const envLoaded = loadEnv();
-            if (!envLoaded) {
-                Log.error('Failed to load environment variables');
-                throw new Error('Failed to load environment variables');
-            }
+            // Ensure environment variables are loaded
+            await this.ensureEnvironment();
 
-            // Verify required environment variables are present
-            const requiredVars = ['AWS_REGION', 'BUCKET_NAME', 'LAMBDA_FUNCTION_NAME'];
-            const missingVars = requiredVars.filter(varName => !process.env[varName]);
-            
-            if (missingVars.length > 0) {
-                throw new Error(`Missing required environment variables: ${missingVars.join(', ')}`);
-            }
-
-            // Initialize S3 client
+            // Initialize S3 client with verified environment variables
             await this.initializeS3Client();
             
             this.initialized = true;
@@ -73,7 +61,7 @@ module.exports = NodeHelper.create({
         } catch (error) {
             Log.error('Module initialization failed:', error);
             this.initialized = false;
-            throw error; // Propagate the error
+            throw error;
         } finally {
             this.initializationInProgress = false;
         }
@@ -130,12 +118,11 @@ module.exports = NodeHelper.create({
 
     async getPhotosFromS3() {
         try {
+            // Ensure environment is loaded before proceeding
+            await this.ensureEnvironment();
+            
             Log.info('Requesting photo manifest from Lambda');
             
-            if (!process.env.LAMBDA_FUNCTION_NAME) {
-                throw new Error('Lambda function name not configured');
-            }
-
             Log.info('Environment configuration:', {
                 lambdaFunction: process.env.LAMBDA_FUNCTION_NAME,
                 region: process.env.AWS_REGION,
@@ -399,5 +386,25 @@ module.exports = NodeHelper.create({
             Log.error('Error processing new photo:', error);
             this.sendSocketNotification('PHOTOS_ERROR', error.message);
         }
+    },
+
+    async ensureEnvironment() {
+        const requiredVars = ['AWS_REGION', 'BUCKET_NAME', 'LAMBDA_FUNCTION_NAME', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY'];
+        const missingVars = requiredVars.filter(varName => !process.env[varName]);
+
+        if (missingVars.length > 0) {
+            Log.info(`Missing environment variables: ${missingVars.join(', ')}. Attempting to load from config...`);
+            const loaded = loadEnv();
+            if (!loaded) {
+                throw new Error('Failed to load required environment variables from config files');
+            }
+            
+            // Verify again after loading
+            const stillMissing = requiredVars.filter(varName => !process.env[varName]);
+            if (stillMissing.length > 0) {
+                throw new Error(`Still missing required environment variables after loading config: ${stillMissing.join(', ')}`);
+            }
+        }
+        return true;
     }
 });

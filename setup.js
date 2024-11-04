@@ -58,7 +58,7 @@ const questions = [
     {
         type: 'input',
         name: 'region',
-        message: 'Enter your AWS Region:',
+        message: 'Enter your AWS Region eg. us-east-1:',
         when: (answers) => answers.hasAwsAccount && (!answers.useExistingCreds || !fs.existsSync('./local_aws-credentials'))
     }
 ];
@@ -298,32 +298,28 @@ const deployInfrastructure = async (credentials) => {
 
 const generateConfigFiles = async (credentials) => {
     await awsCredentials.withCredentials(async () => {
-        // Read the aws-resources.json file if it exists
-        const resourcesPath = path.join(__dirname, 'aws-resources.json');
-        let config;
+        // Get stack outputs for resources
+        const cloudFormationClient = new CloudFormationClient({ region: credentials.region });
+        const command = new DescribeStacksCommand({ StackName: 'S3PhotosStack' });
+        const data = await cloudFormationClient.send(command);
+        const outputs = data.Stacks[0].Outputs;
         
-        try {
-            config = JSON.parse(fs.readFileSync(resourcesPath, 'utf8'));
-        } catch (error) {
-            // If file doesn't exist, use the values from the stack outputs
-            const bucketName = await getBucketName(credentials.region);
-            if (!bucketName) throw new Error('Failed to retrieve bucket name');
-            
-            config = {
-                s3Bucket: bucketName,
-                s3Region: credentials.region,
-                accountId: credentials.accountId,
-                lambdaFunction: `S3PhotosStack-S3PhotosHandlerC25B5D77-DSsc6PiQUTBi` // From stack output
-            };
-            
-            // Save aws-resources.json
-            fs.writeFileSync(resourcesPath, JSON.stringify(config, null, 2));
-        }
+        // Extract values from stack outputs
+        const config = {
+            s3Bucket: outputs.find(o => o.OutputKey === 'S3PhotosBucketName').OutputValue,
+            s3Region: credentials.region,
+            accountId: credentials.accountId,
+            lambdaFunction: outputs.find(o => o.OutputKey === 'S3PhotosHandlerName').OutputValue
+        };
+        
+        // Save aws-resources.json
+        const resourcesPath = path.join(__dirname, 'aws-resources.json');
+        fs.writeFileSync(resourcesPath, JSON.stringify(config, null, 2));
 
-        // Upload sample files
+        // Upload sample files using the bucket name from config
         await uploadSampleFile(config.s3Bucket);
 
-        // Generate minimal IAM policy
+        // Generate minimal IAM policy using values from config
         const minimalPolicy = {
             Version: "2012-10-17",
             Statement: [
