@@ -250,7 +250,12 @@ module.exports = NodeHelper.create({
             };
 
             const data = await this.s3Client.send(new GetObjectCommand(getObjectParams));
-            const localPath = path.join(this.cacheDir, path.basename(key));
+            
+            // Create full cache path including subdirectories
+            const localPath = path.join(this.cacheDir, key);
+            
+            // Create subdirectories if they don't exist
+            await fsp.mkdir(path.dirname(localPath), { recursive: true });
             
             const chunks = [];
             for await (const chunk of data.Body) {
@@ -261,7 +266,8 @@ module.exports = NodeHelper.create({
             await fsp.writeFile(localPath, buffer);
             Log.info(`Successfully downloaded ${key} to ${localPath}`);
             
-            return path.join('cache', path.basename(key));
+            // Return path relative to module root, maintaining folder structure
+            return path.join('cache', key);
         } catch (error) {
             Log.error(`Error downloading photo ${key}:`, error);
             throw error;

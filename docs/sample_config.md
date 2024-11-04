@@ -12,23 +12,23 @@ Add the module to your `config.js` file:
         displayDurationSeconds: 60,  // How long to show each photo
         
         // Display Style Options
-        displayStyle: "fit-region",   // Choose one:
-                                    // "wallpaper" (fills screen)
+        displayStyle: "fit-region", // Choose one:
+                                    // "wallpaper" (stretches to fill region) will add a duplicate option called "fill" in a future release and sunset this option for better clarity.
                                     // "fit-region" (maintains aspect ratio)
-                                    // "absolute" (fixed size)
+                                    // "absolute" (fixed size based on one edge)
         applyBlur: false,           // Adds a blurred background in empty spaces
-        // Only used when displayStyle is "absolute"
-        absoluteOptions: {
+        // Only used when displayStyle is "absolute", omit if not using absolute mode
+        absoluteOptions: {           
             enabled: false,
             side: "horizontal",      // "horizontal" = fixed width, "vertical" = fixed height
-            size: 400,              // Size in pixels for the fixed dimension
+            size: 400,               // Size in pixels for the fixed dimension
             blurContainer: {
-                width: 500,         // Only used if applyBlur is true and displayStyle is absolute
-                height: 500         // Defines the size of the blur effect container
+                width: 500,          // Only used if applyBlur is true and displayStyle is absolute
+                height: 500          // Defines the size of the blur effect container
             }
         },
         // Photo Order Options
-        displayOrder: "random",      // Choose one:
+        displayOrder: "random",     // Choose one:
                                     // "random" (completely random)
                                     // "random_dedupe" (won't repeat until all photos are shown)
                                     // "newest_first" (chronological, newest photos first)
@@ -48,7 +48,8 @@ Add the module to your `config.js` file:
                                      // "top-right"
                                      // "bottom-left"
                                      // "bottom-right"
-            relativeTo: "display"    // "display" or "image" defines where the corners are relative to
+            relativeTo: "display"    // "display" or "image" 
+                                     // defines where the corners for attribution are relative to. in wallpaper mode the image is the wallpaper you should select "display" or the pill will be at the original corners of the photo pre-streching. this will be fixed in a future release.
         },
         selfieUploads: false,  // Whether to process and upload photos from MMM-Selfieshot
         selfieFolder: "selfies" // S3 folder name for selfieshot uploads
