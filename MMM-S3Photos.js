@@ -313,6 +313,27 @@ Module.register("MMM-S3Photos", {
 
             img.onload = () => {
                 const aspectRatio = img.naturalWidth / img.naturalHeight;
+                
+                // Set the aspect ratio as a CSS variable
+                wrapper.style.setProperty('--image-ratio', aspectRatio);
+                
+                // If using absolute sizing, add the appropriate class and set size
+                if (this.config.displayStyle === "absolute" && this.config.absoluteOptions.enabled) {
+                    wrapper.classList.add(this.config.absoluteOptions.side); // Add horizontal/vertical class
+                    
+                    if (this.config.absoluteOptions.side === "horizontal") {
+                        wrapper.style.setProperty('--absolute-width', `${this.config.absoluteOptions.size}px`);
+                        // Calculate height based on aspect ratio
+                        const height = this.config.absoluteOptions.size / aspectRatio;
+                        imageContainer.style.height = `${height}px`;
+                    } else {
+                        wrapper.style.setProperty('--absolute-height', `${this.config.absoluteOptions.size}px`);
+                        // Calculate width based on aspect ratio
+                        const width = this.config.absoluteOptions.size * aspectRatio;
+                        imageContainer.style.width = `${width}px`;
+                    }
+                }
+                
                 Log.info(`Image natural dimensions - Width: ${img.naturalWidth}, Height: ${img.naturalHeight}, Aspect Ratio: ${aspectRatio}`);
                 
                 // Wait for next frame to ensure DOM is ready
