@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "target": "ES6", // ES6 is compatible while retaining async functions, etc.
+    "module": "commonjs", // Make sure modules are compiled to CommonJS
+    "lib": ["es6"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "outDir": "dist",
+    "rootDir": "."
+  },
+  "include": ["bin/**/*.js", "lib/**/*.js"]
+}

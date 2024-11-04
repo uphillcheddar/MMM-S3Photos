@@ -1,0 +1,176 @@
+.MMM-S3Photos {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    transition: background-image 0.3s ease-in-out;
+}
+
+.MMM-S3Photos.wallpaper {
+    background-size: cover;
+    background-repeat: no-repeat;
+    background-position: center;
+}
+
+.MMM-S3Photos.fit-region {
+    background-size: contain;
+    background-repeat: no-repeat;
+    background-position: center;
+    z-index: 0;
+}
+
+.MMM-S3Photos.blur {
+    background-size: cover;
+    background-position: center;
+    filter: blur(10px) brightness(0.5);
+}
+
+.MMM-S3Photos .image-container {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    background-position: center;
+    background-repeat: no-repeat;
+    background-size: contain;
+    transition: background-image 0.3s ease-in-out;
+    z-index: 1;
+}
+
+.MMM-S3Photos.wallpaper .image-container {
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+}
+
+.MMM-S3Photos.fit-region .image-container {
+    background-size: contain;
+    background-position: center;
+    background-repeat: no-repeat;
+}
+
+.MMM-S3Photos.absolute .image-container {
+    background-size: contain;
+}
+
+.MMM-S3Photos.absolute.horizontal .image-container {
+    width: var(--absolute-width);
+    height: auto;
+    aspect-ratio: var(--image-ratio);
+}
+
+.MMM-S3Photos.absolute.vertical .image-container {
+    width: auto;
+    height: var(--absolute-height);
+    aspect-ratio: var(--image-ratio);
+}
+
+.MMM-S3Photos.absolute .blur-container {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: var(--blur-width);
+    height: var(--blur-height);
+    overflow: hidden;
+    z-index: 0;
+}
+
+.MMM-S3Photos.absolute .blur-container .blur-background {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    background-size: cover;
+    background-position: center;
+    filter: blur(10px) brightness(0.5);
+}
+
+.s3-photo {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+/* Blur background for non-absolute modes */
+.MMM-S3Photos .blur-background {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-size: cover;
+    background-position: center;
+    filter: blur(10px) brightness(0.5);
+    z-index: 0;
+}
+
+/* Base attribution styles */
+.attribution {
+    position: absolute;
+    padding: 5px 10px;
+    background-color: rgba(0, 0, 0, 0.6);
+    color: white;
+    border-radius: 15px;
+    font-size: 14px;
+    z-index: 2;
+}
+
+/* Attribution positioning relative to display */
+.MMM-S3Photos .attribution[data-relative="display"] {
+    position: fixed;
+    &.top-left { top: 10px; left: 10px; }
+    &.top-right { top: 10px; right: 10px; }
+    &.bottom-left { bottom: 10px; left: 10px; }
+    &.bottom-right { bottom: 10px; right: 10px; }
+}
+
+/* Attribution positioning relative to image */
+.MMM-S3Photos .attribution[data-relative="image"] {
+    --image-offset: 10px;
+    position: absolute;
+    transform: none;
+    transition: opacity 0.3s ease-in-out;
+    
+    &.top-left {
+        top: calc((100% - var(--image-height)) / 2 + var(--image-offset));
+        left: calc((100% - var(--image-width)) / 2 + var(--image-offset));
+    }
+    &.top-right {
+        top: calc((100% - var(--image-height)) / 2 + var(--image-offset));
+        right: calc((100% - var(--image-width)) / 2 + var(--image-offset));
+    }
+    &.bottom-left {
+        bottom: calc((100% - var(--image-height)) / 2 + var(--image-offset));
+        left: calc((100% - var(--image-width)) / 2 + var(--image-offset));
+    }
+    &.bottom-right {
+        bottom: calc((100% - var(--image-height)) / 2 + var(--image-offset));
+        right: calc((100% - var(--image-width)) / 2 + var(--image-offset));
+    }
+}
+
+/* Ensure the image container bounds are respected */
+.MMM-S3Photos.fit-region img {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    display: block;
+}
+
+.MMM-S3Photos.updating .attribution {
+    opacity: 0;
+    transition: opacity 0.3s ease-out;
+}
+
+.MMM-S3Photos .attribution.hidden {
+    opacity: 0;
+    transition: none;
+}
+
+.MMM-S3Photos .attribution {
+    opacity: 1;
+    transition: opacity 0.3s ease-in;
+}

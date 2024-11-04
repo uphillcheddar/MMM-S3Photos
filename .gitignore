@@ -1,0 +1,25 @@
+# Node.js dependencies
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# AWS CDK files
+cdk.out/
+*.assets.json
+
+# AWS credentials
+local_aws-credentials
+
+# Lambda zip file
+lambda.zip
+
+# Environment variables
+.env
+
+# Logs
+logs/
+*.log
+
+# OS-specific files
+.DS_Store
+Thumbs.db

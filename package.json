@@ -1,0 +1,25 @@
+{
+  "name": "mmm-s3photos",
+  "version": "1.0.0",
+  "description": "MagicMirror module for displaying photos from AWS S3",
+  "main": "MMM-S3Photos.js",
+  "scripts": {
+    "setup": "node setup.js",
+    "deploy": "cdk deploy",
+    "destroy": "cdk destroy",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "@aws-sdk/client-cloudformation": "^3.0.0",
+    "@aws-sdk/client-lambda": "^3.0.0",
+    "@aws-sdk/client-s3": "^3.0.0",
+    "aws-cdk": "^2.0.0",
+    "aws-cdk-lib": "^2.0.0",
+    "constructs": "^10.0.0",
+    "dotenv": "^16.0.0",
+    "inquirer": "^8.2.4",
+    "uuid": "^9.0.0"
+  },
+  "author": "",
+  "license": "MIT"
+}
