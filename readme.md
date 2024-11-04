@@ -4,6 +4,8 @@ A MagicMirror² module that displays photos from an AWS S3 bucket with various d
 
 This module was created as a result of Google Photos crippling their API and limiting how you can access your own data. While AWS is not free like Google Photos, it does provide a more open and flexible platform for storing and accessing your photos. And if configured properly, can be very inexpensive to run. My set up has a monthly cost of ~$0.60 thats not a typo 60 CENTS! if you are on the free tier it will be even cheaper. see cost breakdown for more details.
 
+![screenshot](./screenshots/Screenshot_in_action.png)
+
 ## Buy me a coffee
 I'm a overworked, and underpaid, tech worker in the analytics and intelligence industry. I spend my free time creating and sharing side projects like MagicMirror modules and 3D printing STL files with the community. If you enjoy my work and want to support future projects, buy me a coffee! ☕
 
@@ -41,13 +43,14 @@ I'm a overworked, and underpaid, tech worker in the analytics and intelligence i
 
 
 # AWS Costs
-
 This module uses AWS services that may incur charges.
 
 Example details:
 - 10GB of photos
 - Hourly sync requests 
 - No cache wipes <-this one is important, wiping the cache is the bigest potental cost driver. Note there should be no reason to wipe the cache as the module will prune photos that have been deleted from the S3 bucket, but if your use case involves photos with the same file name and a need to regularly purge the cache feature is available.
+
+**NOTE Prices are for the US regions as of 10-2024 Other regions may vary. Check [AWS Pricing](https://aws.amazon.com/pricing/) for current rates in your region.**
 
 ## Breakdown for the free tier:
 
@@ -71,11 +74,9 @@ Example details:
 ## Grand Total- For most users, on the aws free tier, this module will cost ~$.30 Cents per month.
 
 ## No free tier?
- The cost will be about the same as the free tier on a monthly basis. Howwever the first month will be ~$1.00 as you will not have the advantage of the free tier data transfer. So the inital load will hit you for about 40 cents. But after that you will only pay about $0.60 per month. 
+ The cost will be about the same as the free tier on a monthly basis. Howwever the first month will be ~$1.00 as you will not have the advantage of the free tier data transfer. So the inital load will hit you for about 40 cents. But after that you will only pay about $0.60 per month. (lambda remains free at such a low use)
  
- Lambda functions are essentially free for our usecase as they are billed per million invocations and even if you are not on the free tier they'll round down to $0.00
  
-# **Note: These prices are for the US regions as of 10-2024 Other regions may vary. Check [AWS Pricing](https://aws.amazon.com/pricing/) for current rates in your region.**
 
 
 ## To Do / Wish List / On the Back Burner
@@ -92,6 +93,14 @@ Example details:
    git clone https://github.com/uphillcheddar/MMM-S3Photos.git
    ```
  * create aws account and setup IAM user and access key see [AWS Account Creation Steps](docs/aws_account_creation_steps.md)
+ * go to the module directory
+   ```bash
+   cd ~/MagicMirror/modules/MMM-S3Photos
+   ```
+ * install dependencies
+   ```bash
+   npm install
+   ```
  * run setup script
    ```bash
    sudo node ~/MagicMirror/modules/MMM-S3Photos/setup.js
