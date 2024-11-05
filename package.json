@@ -1,5 +1,5 @@
 {
-  "name": "MMM-SPhotos",
+  "name": "MMM-S3Photos",
   "version": "1.0.0",
   "description": "MagicMirror module for displaying photos from AWS S3",
   "repository": {
