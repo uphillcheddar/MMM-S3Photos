@@ -1,7 +1,17 @@
 {
-  "name": "mmm-s3photos",
+  "name": "MMM-SPhotos",
   "version": "1.0.0",
   "description": "MagicMirror module for displaying photos from AWS S3",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/uphillcheddar/MMM-S3Photos.git"
+  },
+  "homepage": "https://github.com/uphillcheddar/MMM-S3Photos#readme",
+  "keywords": [
+    "MagicMirror",
+    "S3",
+    "photos"
+  ],
   "main": "MMM-S3Photos.js",
   "scripts": {
     "setup": "node setup.js",
@@ -20,6 +30,6 @@
     "inquirer": "^8.2.4",
     "uuid": "^9.0.0"
   },
-  "author": "",
+  "author": "Uphillcheddar",
   "license": "MIT"
 }
