@@ -33,5 +33,5 @@ How to create an AWS account and setup the infrastructure for the MMM-S3Photos m
 * Step 5: Setup
   *  run setup script
      ```bash
-     sudo node ./setup.sh
+     node ~/MagicMirror/modules/MMM-S3Photos/setup.sh
      ```
