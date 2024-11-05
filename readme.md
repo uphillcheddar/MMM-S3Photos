@@ -4,6 +4,9 @@ A MagicMirror² module that displays photos from an AWS S3 bucket with various d
 
 This module was created as a result of Google Photos crippling their API and limiting how you can access your own data. While AWS is not free like Google Photos, it does provide a more open and flexible platform for storing and accessing your photos. And if configured properly, can be very inexpensive to run. My set up has a monthly cost of ~$0.60 thats not a typo 60 CENTS! if you are on the free tier it will be even cheaper. see cost breakdown for more details.
 
+This is under active development so some minor quirks should be expected. will do my best to fix them as they are reported.
+See the docs folder for more details on configuration options and other details.
+
 
 ![screenshot](./screenshots/Screenshot_in_action.png)
 (absolute mode)
