@@ -32,6 +32,44 @@ module.exports = NodeHelper.create({
         
         Log.info('Module directory:', this.moduleDir);
         Log.info('Cache directory:', this.cacheDir);
+
+        // Watch for new uploads
+        const uploadFile = path.join(this.cacheDir, 'last_upload.json');
+        fs.watch(this.cacheDir, async (eventType, filename) => {
+            if (filename === 'last_upload.json' && eventType === 'change') {
+                try {
+                    const data = JSON.parse(await fsp.readFile(uploadFile, 'utf8'));
+                    if (data.newPhotos) {
+                        await this.updateManifestWithNewPhotos(data.newPhotos);
+                        this.sendSocketNotification("PHOTOS_UPDATED", await this.getPhotosFromS3());
+                        // Clean up the notification file
+                        await fsp.unlink(uploadFile);
+                    }
+                } catch (error) {
+                    Log.error('Error processing upload notification:', error);
+                }
+            }
+        });
+
+        // Watch for sample deletion 
+        fs.watch(this.cacheDir, async (eventType, filename) => {
+            if (filename === 'last_update.json' && eventType === 'change') {
+                try {
+                    const data = JSON.parse(await fsp.readFile(path.join(this.cacheDir, filename), 'utf8'));
+                    if (data.type === 'FILES_DELETED' && Array.isArray(data.files)) {
+                        Log.info(`Processing deletion of ${data.files.length} files`);
+                        
+                        // Trigger Lambda sync to get updated file list
+                        await this.handleGetPhotos();
+                        
+                        // Clean up notification file
+                        await fsp.unlink(path.join(this.cacheDir, filename));
+                    }
+                } catch (error) {
+                    Log.error('Error processing update notification:', error);
+                }
+            }
+        });
     },
 
     async initializeModule() {
@@ -49,10 +87,13 @@ module.exports = NodeHelper.create({
             this.initializationInProgress = true;
             Log.info('Starting module initialization');
 
-            // Ensure environment variables are loaded
-            await this.ensureEnvironment();
+            // First ensure environment variables are loaded from local files
+            const envLoaded = await this.ensureEnvironment();
+            if (!envLoaded) {
+                throw new Error("Failed to load environment variables from local configuration");
+            }
 
-            // Initialize S3 client with verified environment variables
+            // Initialize S3 client using your existing method
             await this.initializeS3Client();
             
             this.initialized = true;
@@ -68,38 +109,86 @@ module.exports = NodeHelper.create({
     },
 
     socketNotificationReceived: async function(notification, payload) {
-        Log.info(`Node helper received notification: ${notification}`, payload);
-        
-        if (notification === 'GET_PHOTOS') {
-            if (!this.initialized) {
-                Log.info('Module not initialized, attempting initialization');
-                const success = await this.initializeModule();
-                if (!success) {
-                    Log.error('Failed to initialize module');
-                    this.sendSocketNotification('PHOTOS_ERROR', 'Failed to initialize module');
-                    return;
+        switch(notification) {
+            case "INIT":
+                // ... existing init code ...
+                break;
+                
+            case "GET_PHOTOS":
+                try {
+                    // Ensure module is initialized before proceeding
+                    if (!this.initialized) {
+                        await this.initializeModule();
+                    }
+                    await this.handleGetPhotos(payload);
+                } catch (error) {
+                    console.error("MMM-S3Photos Error:", error);
+                    this.sendSocketNotification("PHOTOS_ERROR", error.message || "Failed to fetch photos");
                 }
+                break;
+                
+            case "USB_PHOTOS_UPLOADED":
+                Log.info("Received USB photos upload notification");
+                if (payload && payload.newPhotos) {
+                    // Update the manifest with new photos
+                    await this.updateManifestWithNewPhotos(payload.newPhotos);
+                    // Trigger a refresh of the display
+                    this.sendSocketNotification("PHOTOS_UPDATED", await this.getPhotosFromS3());
+                }
+                break;
+                
+            case "GPHOTO_UPLOAD":
+                Log.info("Received new selfie photo notification");
+                if (payload) {
+                    await this.handleNewPhoto(payload);
+                    // Refresh photos after handling new photo
+                    this.sendSocketNotification("PHOTOS_UPDATED", await this.getPhotosFromS3());
+                }
+                break;
+        }
+    },
+
+    getPhotos: async function(config) {
+        try {
+            if (!this.initialized) {
+                await this.initializeModule();
             }
 
-            this.handleGetPhotos(payload).catch(error => {
-                Log.error('Error in handleGetPhotos:', error);
-                this.sendSocketNotification('PHOTOS_ERROR', error.message);
+            const photos = await this.getPhotosFromS3();
+            
+            // Add additional validation for photo objects
+            const validatedPhotos = photos.map(photo => {
+                return {
+                    url: photo.url,
+                    key: photo.key,
+                    lastModified: photo.lastModified,
+                    // Add validation flag for frontend
+                    isValid: Boolean(photo.url && photo.key)
+                };
             });
-        } else if (notification === 'NEW_PHOTO') {
-            this.handleNewPhoto(payload).catch(error => {
-                Log.error('Error processing new photo:', error);
-                this.sendSocketNotification('PHOTOS_ERROR', error.message);
-            });
+
+            return validatedPhotos;
+
+        } catch (error) {
+            console.error("MMM-S3Photos getPhotos Error:", error);
+            throw error;
+        }
+    },
+
+    // Add helper method for URL validation if needed
+    validatePhotoUrl: function(url) {
+        if (!url || typeof url !== 'string') return false;
+        try {
+            new URL(url);
+            return true;
+        } catch {
+            return false;
         }
     },
 
     async handleGetPhotos(payload) {
         try {
             Log.info('Starting photo retrieval process');
-            if (!this.s3Client) {
-                throw new Error('S3 client not initialized');
-            }
-
             const photos = await awsCredentials.withCredentials(async () => {
                 return await this.getPhotosFromS3();
             });
@@ -178,10 +267,22 @@ module.exports = NodeHelper.create({
 
             // Process deletions
             for (const fileToDelete of payload.toDelete) {
-                const filePath = path.join(this.cacheDir, path.basename(fileToDelete.key));
-                if (fs.existsSync(filePath)) {
-                    await fsp.unlink(filePath);
-                    Log.info(`Deleted: ${filePath}`);
+                try {
+                    // Delete from cache directory
+                    const localPath = path.join(this.cacheDir, fileToDelete.key);
+                    if (fs.existsSync(localPath)) {
+                        await fsp.unlink(localPath);
+                        Log.info(`Deleted local file: ${localPath}`);
+                    }
+                    
+                    // Also check for the file in the root of cache dir
+                    const rootPath = path.join(this.cacheDir, path.basename(fileToDelete.key));
+                    if (fs.existsSync(rootPath)) {
+                        await fsp.unlink(rootPath);
+                        Log.info(`Deleted root cache file: ${rootPath}`);
+                    }
+                } catch (error) {
+                    Log.error(`Error deleting file ${fileToDelete.key}:`, error);
                 }
             }
 
@@ -207,7 +308,10 @@ module.exports = NodeHelper.create({
             const successfulDownloads = downloadResults.filter(result => result !== null);
 
             const updatedManifest = currentManifest
-                .filter(photo => !payload.toDelete.find(d => d.key === photo.key))
+                .filter(photo => !payload.toDelete.some(d => 
+                    d.key === photo.key || 
+                    path.basename(d.key) === path.basename(photo.key)
+                ))
                 .concat(successfulDownloads);
 
             await fsp.writeFile(
@@ -215,7 +319,7 @@ module.exports = NodeHelper.create({
                 JSON.stringify(updatedManifest, null, 2)
             );
 
-            Log.info(`Successfully processed changes. Photos count: ${updatedManifest.length}`);
+            Log.info(`Manifest updated: Removed ${payload.toDelete.length} files, added ${successfulDownloads.length} files`);
             return updatedManifest;
 
         } catch (error) {
@@ -412,5 +516,39 @@ module.exports = NodeHelper.create({
             }
         }
         return true;
+    },
+
+    async updateManifestWithNewPhotos(newPhotos) {
+        try {
+            const manifestPath = path.join(this.cacheDir, 'photos.json');
+            let currentManifest = [];
+            
+            // Read existing manifest if it exists
+            try {
+                const manifestData = await fsp.readFile(manifestPath, 'utf8');
+                currentManifest = JSON.parse(manifestData);
+            } catch (error) {
+                Log.warn('Starting with empty manifest');
+            }
+
+            // Add new photos to manifest
+            const updatedManifest = [
+                ...currentManifest,
+                ...newPhotos.filter(newPhoto => 
+                    !currentManifest.some(existing => existing.key === newPhoto.key)
+                )
+            ];
+
+            // Write updated manifest
+            await fsp.writeFile(
+                manifestPath,
+                JSON.stringify(updatedManifest, null, 2)
+            );
+
+            Log.info(`Manifest updated with ${newPhotos.length} new photos`);
+        } catch (error) {
+            Log.error('Error updating manifest:', error);
+            throw error;
+        }
     }
 });

@@ -6,6 +6,10 @@ const path = require('path');
 const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
 const { CloudFormationClient, DescribeStacksCommand } = require('@aws-sdk/client-cloudformation');
 const awsCredentials = require('./utils/awsCredentials');
+const { EventEmitter } = require('events');
+
+// Set max listeners to 15 to prevent warnings
+EventEmitter.defaultMaxListeners = 15;
 
 const isCommandAvailable = (command) => {
     try {
@@ -16,6 +20,16 @@ const isCommandAvailable = (command) => {
     }
 };
 
+const checkWorkingDirectory = () => {
+    // Get the directory name of the current working directory
+    const currentDir = path.basename(process.cwd());
+    
+    if (currentDir !== 'MMM-S3Photos') {
+        console.error('\x1b[31mError: This script must be run from the MMM-S3Photos module directory\x1b[0m');
+        console.log('\nPlease use cd to change to the MMM-S3Photos module directory and then run this script again');
+        process.exit(1);
+    }
+};
 
 const questions = [
     {
@@ -58,7 +72,7 @@ const questions = [
     {
         type: 'input',
         name: 'region',
-        message: 'Enter your AWS Region eg. us-east-1:',
+        message: 'Enter your AWS Region example: us-east-1:',
         when: (answers) => answers.hasAwsAccount && (!answers.useExistingCreds || !fs.existsSync('./local_aws-credentials'))
     }
 ];
@@ -110,7 +124,7 @@ const uploadSampleFile = async (bucketName) => {
         const filePath2 = path.join(__dirname, 'cache', 'samples', 'pexels-matreding.jpg');
         const fileContent2 = fs.readFileSync(filePath2);  
         const filePath3 = path.join(__dirname, 'cache', 'samples', 'pexels-pixabay.jpg');
-        const fileContent3 = fs.readFileSync(filePath2);    
+        const fileContent3 = fs.readFileSync(filePath3);    
 
         const params1 = {
             Bucket: bucketName,
@@ -184,9 +198,31 @@ const setupModulePermissions = async () => {
     }
 };
 
+// Add after other requires
+const isRoot = () => process.getuid && process.getuid() === 0;
+
+const checkSudoPrivileges = () => {
+    // Only check for sudo on Linux/Mac systems
+    if (os.platform() !== 'linux' && os.platform() !== 'darwin') {
+        return;
+    }
+
+    // Check if AWS CLI is already installed
+    const awsInstalled = isCommandAvailable('aws');
+    
+    if (!awsInstalled && !isRoot()) {
+        console.error('\x1b[31mError: AWS CLI installation requires sudo privileges\x1b[0m');
+        console.log('\nPlease run the setup script with sudo:');
+        console.log('\x1b[33msudo node setup.js\x1b[0m\n');
+        process.exit(1);
+    }
+};
 
 const main = async () => {
     try {
+        checkWorkingDirectory();
+        checkSudoPrivileges();
+        
         const answers = await inquirer.prompt(questions);
         
         // Early exit if no AWS account
@@ -358,7 +394,7 @@ const generateConfigFiles = async (credentials) => {
     console.log('.');
     console.log('.');
     console.log('Sample files have been uploaded to the S3 bucket. To delete them run the below command after uploading your own photos:');
-    console.log(' node delete_sample.js');
+    console.log(' node delete_samples.js');
     console.log('.');
     console.log('.');
     console.log('For your convenience a script has been added to help upload photos to the S3 bucket and copy them to the local cache folder. connect usb stick and run:');

@@ -5,6 +5,39 @@ const path = require('path');
 const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
 const awsCredentials = require('./utils/awsCredentials');
 const loadEnv = require('./utils/loadEnv');
+const moduleDir = path.resolve(__dirname);
+const cacheDir = path.join(moduleDir, 'cache');
+
+async function checkSudo() {
+    try {
+        // Check if sudo is installed
+        await execPromise('which sudo');
+        
+        // Check if we have sudo privileges
+        const sudoTest = await execPromise('sudo -n true');
+        return true;
+    } catch (error) {
+        if (error.message.includes('sudo: a password is required')) {
+            console.log('\nThis script requires sudo privileges to mount USB devices.');
+            console.log('Please run the script with sudo: sudo node upload_from_usb.js\n');
+        } else if (error.message.includes('which: no sudo')) {
+            console.log('\nError: sudo is not installed on this system.');
+            console.log('Please install sudo first: apt-get install sudo\n');
+        } else {
+            console.error('\nError checking sudo privileges:', error.message);
+        }
+        return false;
+    }
+}
+
+async function ensureCacheDir() {
+    try {
+        await fs.mkdir(cacheDir, { recursive: true });
+    } catch (error) {
+        console.error('Error creating cache directory:', error);
+        throw error;
+    }
+}
 
 // Helper function to execute shell commands with promises
 const execPromise = (command) => {
@@ -24,11 +57,21 @@ async function getUsbDevices() {
         const devices = JSON.parse(output).blockdevices
             .filter(device => device.type === 'disk' && !device.name.startsWith('mmcblk'));
         
-        return devices.map(device => ({
-            name: `${device.label || device.name} (${device.size})`,
-            value: device.name,
-            mountpoint: device.mountpoint
+        // For each device, get its first partition's mountpoint if it exists
+        const enrichedDevices = await Promise.all(devices.map(async device => {
+            const partitionOutput = await execPromise(`lsblk -J -o NAME,MOUNTPOINT /dev/${device.name}`);
+            const partitions = JSON.parse(partitionOutput).blockdevices[0].children || [];
+            const firstPartition = partitions[0] || {};
+            
+            return {
+                name: `${device.label || device.name} (${device.size})`,
+                value: device.name,
+                mountpoint: firstPartition.mountpoint || null,
+                partition: `${device.name}1` // Assuming first partition
+            };
         }));
+        
+        return enrichedDevices;
     } catch (error) {
         console.error('Error getting USB devices:', error);
         return [];
@@ -82,13 +125,13 @@ async function copyPhotoToCache(sourcePath, targetKey) {
     const cachePath = path.join(cacheDir, targetKey);
     
     // Create subdirectories if they don't exist
-    await fs.promises.mkdir(path.dirname(cachePath), { recursive: true });
+    await fs.mkdir(path.dirname(cachePath), { recursive: true });
     
     // Copy the file
-    await fs.promises.copyFile(sourcePath, cachePath);
+    await fs.copyFile(sourcePath, cachePath);
     
     // Get file size for manifest
-    const stats = await fs.promises.stat(cachePath);
+    const stats = await fs.stat(cachePath);
     
     return {
         url: targetKey,  // This matches the S3 path structure
@@ -98,12 +141,38 @@ async function copyPhotoToCache(sourcePath, targetKey) {
     };
 }
 
+// Add new function to notify MagicMirror
+async function notifyMagicMirror(newPhotos) {
+    try {
+        // Write to the module's cache directory
+        const notificationPath = path.join(__dirname, 'cache', 'last_upload.json');
+        await fs.writeFile(
+            notificationPath,
+            JSON.stringify({
+                timestamp: new Date().toISOString(),
+                newPhotos
+            }, null, 2)
+        );
+    } catch (error) {
+        console.error('Error writing notification:', error);
+    }
+}
+
 async function main() {
     try {
+        // Check sudo privileges first
+        const hasSudo = await checkSudo();
+        if (!hasSudo) {
+            process.exit(1);
+        }
+
         // Load environment variables
         if (!loadEnv()) {
             throw new Error('Failed to load environment variables');
         }
+
+        // Ensure cache directory exists
+        await ensureCacheDir();
 
         // Get USB devices
         const devices = await getUsbDevices();
@@ -121,12 +190,32 @@ async function main() {
         }]);
 
         // Get mount point or mount if needed
-        let mountPoint = devices.find(d => d.value === device).mountpoint;
+        const selectedDevice = devices.find(d => d.value === device);
+        let mountPoint = selectedDevice.mountpoint;
+
         if (!mountPoint) {
+            // Device isn't mounted, so let's mount it
             mountPoint = `/media/${device}`;
+            console.log(`Mounting device to ${mountPoint}...`);
+            
             // Create mount point directory if it doesn't exist
             await execPromise(`sudo mkdir -p ${mountPoint}`);
-            await execPromise(`sudo mount /dev/${device}1 ${mountPoint}`);
+            
+            try {
+                await execPromise(`sudo mount /dev/${selectedDevice.partition} ${mountPoint}`);
+                console.log('Device mounted successfully');
+            } catch (error) {
+                // Check if the error is because it's already mounted elsewhere
+                const mountInfo = await execPromise(`findmnt -n -o TARGET /dev/${selectedDevice.partition}`);
+                if (mountInfo) {
+                    console.log(`Device already mounted at ${mountInfo}`);
+                    mountPoint = mountInfo.trim();
+                } else {
+                    throw error; // Re-throw if it's a different error
+                }
+            }
+        } else {
+            console.log(`Device already mounted at ${mountPoint}`);
         }
 
         // Get folders with image counts
@@ -145,6 +234,21 @@ async function main() {
             choices: folderChoices
         }]);
 
+        // Add check for empty selection
+        if (!selectedFolders || selectedFolders.length === 0) {
+            console.log('\nNo folders selected. Exiting now.');
+            
+            // Clean up mount point if we created it
+            if (selectedDevice.mountpoint === null) {
+                console.log('Cleaning up mount point...');
+                await execPromise(`sudo umount ${mountPoint}`);
+                await execPromise(`sudo eject /dev/${device}`);
+                await execPromise(`sudo rmdir ${mountPoint}`);
+            }
+            
+            process.exit(0);
+        }
+
         // Process selected folders
         const filesToProcess = [];
         const processAllFolders = selectedFolders.includes('*');
@@ -158,19 +262,23 @@ async function main() {
             
             for (const file of files) {
                 if (/\.(jpg|jpeg|png|gif)$/i.test(file)) {
+                    const targetKey = path.join(folder, file);
                     filesToProcess.push({
                         sourcePath: path.join(folderPath, file),
-                        s3Key: path.join(folder, file),
+                        s3Key: targetKey,
                         destPath: path.join('cache', file)
                     });
                 }
             }
         }
 
-        // Copy to cache
+        // Process each photo and prepare notification
+        const newPhotos = [];
         console.log('\nCopying files to cache...');
         for (const file of filesToProcess) {
-            await fs.copyFile(file.sourcePath, file.destPath);
+            // Copy to cache with proper folder structure
+            const photoEntry = await copyPhotoToCache(file.sourcePath, file.s3Key);
+            newPhotos.push(photoEntry);
             console.log(`Cached: ${path.basename(file.destPath)}`);
         }
 
@@ -182,34 +290,33 @@ async function main() {
 
         // Safely unmount and eject device
         console.log('\nEjecting device...');
-        await execPromise(`sudo umount ${mountPoint}`);
-        await execPromise(`sudo eject /dev/${device}`);
-        // Clean up mount point directory
-        await execPromise(`sudo rmdir ${mountPoint}`);
+        try {
+            // Unmount first
+            await execPromise(`sudo umount ${mountPoint}`);
+            console.log('Device unmounted successfully');
 
-        console.log('\nUpload complete! You can now safely remove your USB device.');
+            // Try to eject
+            try {
+                await execPromise(`sudo eject /dev/${device}`);
+                console.log('Device ejected successfully');
+            } catch (ejectError) {
+                console.log('Note: Device eject command failed, but unmount was successful');
+            }
 
-        // Process each photo
-        const newPhotos = [];
-        for (const file of selectedFiles) {
-            const sourcePath = path.join(mountPoint, file);
-            const targetKey = path.join(targetFolder, path.basename(file));
-            
-            // Copy to cache with proper folder structure
-            const photoEntry = await copyPhotoToCache(sourcePath, targetKey);
-            newPhotos.push(photoEntry);
-            
-            // Upload to S3
-            await uploadToS3(sourcePath, targetKey);
+        } catch (unmountError) {
+            console.error('Warning: Error during device cleanup:', unmountError.message);
+            console.log('Please ensure the device is unmounted manually before removing');
         }
 
-        // Send notification to MagicMirror
-        const payload = {
-            newPhotos: newPhotos
-        };
+        const payload = { newPhotos };
 
-        const mm = require('../../../js/electron.js');
-        mm.sendSocketNotification('USB_PHOTOS_UPLOADED', payload);
+        // Notify MagicMirror about the new photos
+        await notifyMagicMirror(newPhotos);
+        
+        console.log('\nUpload complete! You can now safely remove your USB device.');
+
+        // Send notification to MagicMirror
+
 
     } catch (error) {
         console.error('Error:', error);

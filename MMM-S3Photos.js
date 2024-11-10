@@ -3,7 +3,11 @@ Module.register("MMM-S3Photos", {
         syncTimeHours: 1, // How often to run the Lambda function and run the delta logic
         cacheLifeDays: 0, // 0 = never clean cache, >0 = days between cache purges
         displayDurationSeconds: 30, // How long (seconds) to display each photo
-        displayStyle: "wallpaper", // "wallpaper", "fit-region", "absolute"
+        displayStyle: "wallpaper", // Choose one:
+                                  // "wallpaper" (fills entire screen)
+                                  // "fill" (fills container region)
+                                  // "fit-display" (maintains aspect ratio, fills display)
+                                  // "absolute" (fixed size)
         absoluteOptions: {
             enabled: false,
             side: "horizontal", // "horizontal" or "vertical"
@@ -37,6 +41,13 @@ Module.register("MMM-S3Photos", {
         this.moduleLoaded = false;
         this.sortedPhotos = null;
         this.currentIndex = 0;
+        this.imagesDisplayed = 0;  // Add counter for total images displayed
+
+        // Set transition duration from config
+        const wrapper = document.getElementById(this.identifier);
+        if (wrapper) {
+            wrapper.style.setProperty('--transition-duration', `${this.config.transitionDurationSeconds || 2}s`);
+        }
     },
 
     notificationReceived: function(notification, payload, sender) {
@@ -45,7 +56,7 @@ Module.register("MMM-S3Photos", {
             this.moduleLoaded = true;
             this.initialize();
         } else if (notification === "GPHOTO_UPLOAD" && this.config.selfieUploads) {
-            Log.info("Received new photo notification:", payload);
+            Log.info("Received new photo notification:");
             this.sendSocketNotification("NEW_PHOTO", {
                 path: payload,
                 folder: this.config.selfieFolder
@@ -105,27 +116,36 @@ Module.register("MMM-S3Photos", {
             return;
         }
 
-        Log.info("Module received socket notification:", notification);
+        Log.info(this.name + " received socket notification:", notification);
         
-        if (notification === "PHOTOS_UPDATED") {
-            if (Array.isArray(payload) && payload.length > 0) {
-                Log.info("Received photos array with length:", payload.length);
-                this.photos = payload;
-                this.errorMessage = null;  // Clear any previous error
+        // Only handle PHOTOS_UPDATED and PHOTOS_ERROR notifications here
+        // These are display-specific notifications that won't create loops
+        switch(notification) {
+            case "PHOTOS_UPDATED":
+                if (Array.isArray(payload) && payload.length > 0) {
+                    Log.info("Received photos array with length:", payload.length);
+                    this.photos = payload;
+                    this.errorMessage = null;
+                    this.loaded = true;
+                    this.updateDom(0);
+                    this.scheduleNextPhoto();
+                } else {
+                    Log.warn("Received empty or invalid photos array");
+                    this.photos = [];
+                    this.errorMessage = "No photos available";
+                    this.loaded = true;
+                    this.updateDom(0);
+                }
+                break;
+
+            case "PHOTOS_ERROR":
+                Log.error("Error received from node helper:", payload);
                 this.loaded = true;
+                this.errorMessage = typeof payload === 'object' ? 
+                    (payload.message || JSON.stringify(payload)) : 
+                    (payload || 'Failed to load photos. Check the server logs for details.');
                 this.updateDom(0);
-            } else {
-                Log.warn("Received empty or invalid photos array");
-                this.photos = [];
-                this.errorMessage = "No photos available";  // Set error message
-                this.loaded = true;
-                this.updateDom(0);
-            }
-        } else if (notification === "PHOTOS_ERROR") {
-            Log.error("Error received from node helper:", payload);
-            this.loaded = true;
-            this.errorMessage = typeof payload === 'string' ? payload : 'Unknown error occurred';
-            this.updateDom(0);
+                break;
         }
     },
 
@@ -196,233 +216,162 @@ Module.register("MMM-S3Photos", {
         return this.config.attribution.attributions[subfolder] || "";
     },
 
-    getAttributionCorner: function() {
-        if (this.config.attribution.position === "dynamic") {
-            const corners = ["top-left", "top-right", "bottom-left", "bottom-right"];
-            return corners[Math.floor(Math.random() * corners.length)];
-        }
-        return this.config.attribution.corner;
-    },
-
     getDom: function() {
         const wrapper = document.createElement("div");
-        wrapper.className = "MMM-S3Photos";
-
-        if (!this.moduleLoaded) {
-            wrapper.innerHTML = "Initializing...";
-            return wrapper;
-        }
-
-        if (!this.loaded) {
-            Log.info("Showing loading state");
-            wrapper.innerHTML = "Loading photos...";
-            
-            if (this.moduleLoaded && !this.loadingTimeout) {
-                this.loadingTimeout = setTimeout(() => {
-                    Log.warn("Loading timeout reached, forcing reload");
-                    this.loadingTimeout = null;
-                    this.getPhotos();
-                }, 10000);
-            }
-            return wrapper;
-        }
-
-        if (this.loadingTimeout) {
-            clearTimeout(this.loadingTimeout);
-            this.loadingTimeout = null;
-        }
-
-        if (this.errorMessage) {
-            Log.error("Showing error state:", this.errorMessage);
-            wrapper.innerHTML = "Error: " + this.errorMessage;
-            return wrapper;
-        }
-
-        if (!this.photos || this.photos.length === 0) {
-            Log.warn("No photos available");
-            wrapper.innerHTML = "No photos available";
-            return wrapper;
-        }
-
-        const photo = this.getNextPhoto();
-        Log.info("Displaying photo:", photo);
+        wrapper.className = `MMM-S3Photos ${this.config.displayStyle}`;
         
-        if (photo && photo.url) {
-            const imageUrl = this.file(photo.url);
-
-            // Add display style class first
-            wrapper.classList.add(this.config.displayStyle);
-
-            // 1. Create blur background first (backmost layer)
+        // Handle absolute sizing
+        if (this.config.displayStyle === "absolute" && this.config.absoluteOptions?.enabled) {
+            const size = this.config.absoluteOptions.size || 400;
+            wrapper.classList.add(this.config.absoluteOptions.side); // Add horizontal/vertical class
+            
+            // Set CSS custom properties for dimensions
+            if (this.config.absoluteOptions.side === "horizontal") {
+                wrapper.style.setProperty('--absolute-width', `${size}px`);
+            } else {
+                wrapper.style.setProperty('--absolute-height', `${size}px`);
+            }
+            
+            // Handle blur container if enabled
             if (this.config.applyBlur) {
-                if (this.config.displayStyle === "absolute" && this.config.absoluteOptions.enabled) {
+                const blurContainer = document.createElement("div");
+                blurContainer.className = "blur-enabled";
+                
+                // Set blur container dimensions
+                if (this.config.absoluteOptions.blurContainer) {
+                    blurContainer.style.setProperty('--blur-width', 
+                        `${this.config.absoluteOptions.blurContainer.width}px`);
+                    blurContainer.style.setProperty('--blur-height', 
+                        `${this.config.absoluteOptions.blurContainer.height}px`);
+                }
+                
+                const photoBack = document.createElement("div");
+                photoBack.className = "photo-back";
+                
+                const photoCurrent = document.createElement("div");
+                photoCurrent.className = "photo-current";
+                
+                blurContainer.appendChild(photoBack);
+                blurContainer.appendChild(photoCurrent);
+                wrapper.appendChild(blurContainer);
+            } else {
+                const photoBack = document.createElement("div");
+                photoBack.className = "photo-back";
+                
+                const photoCurrent = document.createElement("div");
+                photoCurrent.className = "photo-current";
+                
+                wrapper.appendChild(photoBack);
+                wrapper.appendChild(photoCurrent);
+            }
+        } else {
+            // Create photo elements first
+            const photoBack = document.createElement("div");
+            photoBack.className = "photo-back";
+            
+            const photoCurrent = document.createElement("div");
+            photoCurrent.className = "photo-current";
+            
+            // Handle absolute sizing
+            if (this.config.absoluteOptions && this.config.absoluteOptions.enabled) {
+                wrapper.classList.add('absolute');
+                const size = this.config.absoluteOptions.size || 400;
+                
+                if (this.config.absoluteOptions.side === "horizontal") {
+                    wrapper.style.width = `${size}px`;
+                    wrapper.style.height = 'auto';
+                } else {
+                    wrapper.style.height = `${size}px`;
+                    wrapper.style.width = 'auto';
+                }
+                
+                // Create blur container if needed
+                if (this.config.applyBlur) {
                     const blurContainer = document.createElement("div");
                     blurContainer.className = "blur-container";
                     
-                    wrapper.style.setProperty('--blur-width', 
-                        `${this.config.absoluteOptions.blurContainer.width}px`);
-                    wrapper.style.setProperty('--blur-height', 
-                        `${this.config.absoluteOptions.blurContainer.height}px`);
-
-                    const blurBackground = document.createElement("div");
-                    blurBackground.className = "blur-background";
-                    blurBackground.style.backgroundImage = `url("${imageUrl}")`;
-                    
-                    blurContainer.appendChild(blurBackground);
-                    wrapper.appendChild(blurContainer); // Changed from insertBefore
-                } else {
-                    const blurBackground = document.createElement("div");
-                    blurBackground.className = "blur-background";
-                    blurBackground.style.backgroundImage = `url("${imageUrl}")`;
-                    wrapper.appendChild(blurBackground); // Changed from insertBefore
-                }
-            }
-
-            // 2. Create container for the main image (middle layer)
-            const imageContainer = document.createElement("div");
-            imageContainer.className = "image-container";
-            imageContainer.style.backgroundImage = `url("${imageUrl}")`;
-            
-            // Create an actual img element to get dimensions
-            const img = document.createElement("img");
-            img.src = imageUrl;
-            img.style.display = "none";
-            
-            // Create attribution but keep it hidden initially
-            let attribution = null;
-            if (this.config.attribution && this.config.attribution.enabled) {
-                attribution = document.createElement("div");
-                const folder = photo.key.split('/')[0];
-                const text = this.config.attribution.attributions[folder];
-                
-                if (text) {
-                    const corner = this.config.attribution.position === "dynamic" 
-                        ? this.getAttributionCorner()
-                        : this.config.attribution.corner;
-                        
-                    Log.info(`Creating attribution - Text: ${text}, Corner: ${corner}, RelativeTo: ${this.config.attribution.relativeTo}`);
-                    
-                    attribution.className = `attribution ${corner} hidden`;
-                    attribution.dataset.relative = this.config.attribution.relativeTo;
-                    attribution.textContent = text;
-                    imageContainer.appendChild(attribution);
-                    
-                    Log.info(`Attribution element created - Class: ${attribution.className}, Dataset: ${JSON.stringify(attribution.dataset)}`);
-                }
-            }
-
-            img.onload = () => {
-                const aspectRatio = img.naturalWidth / img.naturalHeight;
-                
-                // Set the aspect ratio as a CSS variable
-                wrapper.style.setProperty('--image-ratio', aspectRatio);
-                
-                // If using absolute sizing, add the appropriate class and set size
-                if (this.config.displayStyle === "absolute" && this.config.absoluteOptions.enabled) {
-                    wrapper.classList.add(this.config.absoluteOptions.side); // Add horizontal/vertical class
-                    
-                    if (this.config.absoluteOptions.side === "horizontal") {
-                        wrapper.style.setProperty('--absolute-width', `${this.config.absoluteOptions.size}px`);
-                        // Calculate height based on aspect ratio
-                        const height = this.config.absoluteOptions.size / aspectRatio;
-                        imageContainer.style.height = `${height}px`;
-                    } else {
-                        wrapper.style.setProperty('--absolute-height', `${this.config.absoluteOptions.size}px`);
-                        // Calculate width based on aspect ratio
-                        const width = this.config.absoluteOptions.size * aspectRatio;
-                        imageContainer.style.width = `${width}px`;
-                    }
-                }
-                
-                Log.info(`Image natural dimensions - Width: ${img.naturalWidth}, Height: ${img.naturalHeight}, Aspect Ratio: ${aspectRatio}`);
-                
-                // Wait for next frame to ensure DOM is ready
-                requestAnimationFrame(() => {
-                    // Force a reflow and ensure we have valid dimensions
-                    document.body.offsetHeight;
-                    
-                    // Try multiple ways to get valid container dimensions
-                    const containerWidth = imageContainer.offsetWidth || wrapper.offsetWidth || window.innerWidth;
-                    const containerHeight = imageContainer.offsetHeight || wrapper.offsetHeight || window.innerHeight;
-                    Log.info(`Container dimensions - Width: ${containerWidth}, Height: ${containerHeight}`);
-                    
-                    if (containerWidth === 0 || containerHeight === 0) {
-                        Log.error('Invalid container dimensions, using fallback values');
-                        return;
-                    }
-                    
-                    let imageWidth, imageHeight;
-                    if (containerWidth / containerHeight > aspectRatio) {
-                        imageHeight = containerHeight;
-                        imageWidth = imageHeight * aspectRatio;
-                        Log.info(`Using container height as base - Calculated dimensions - Width: ${imageWidth}, Height: ${imageHeight}`);
-                    } else {
-                        imageWidth = containerWidth;
-                        imageHeight = imageWidth / aspectRatio;
-                        Log.info(`Using container width as base - Calculated dimensions - Width: ${imageWidth}, Height: ${imageHeight}`);
-                    }
-                    
-                    // Ensure we have valid dimensions before proceeding
-                    if (imageWidth > 0 && imageHeight > 0) {
-                        Log.info(`Setting CSS variables - Image Width: ${imageWidth}px, Image Height: ${imageHeight}px`);
-                        wrapper.style.setProperty('--image-width', `${imageWidth}px`);
-                        wrapper.style.setProperty('--image-height', `${imageHeight}px`);
-                        imageContainer.style.setProperty('--image-width', `${imageWidth}px`);
-                        imageContainer.style.setProperty('--image-height', `${imageHeight}px`);
-                        
-                        if (attribution) {
-                            const computedStyle = window.getComputedStyle(attribution);
-                            Log.info(`Attribution data-relative: ${attribution.dataset.relative}, class: ${attribution.className}`);
-                            
-                            // Calculate expected position
-                            const corner = attribution.className.match(/(top|bottom)-(left|right)/)[0];
-                            const verticalOffset = (100 - imageHeight) / 2;
-                            const horizontalOffset = (100 - imageWidth) / 2;
-                            Log.info(`Attribution calculated offsets - Vertical: ${verticalOffset}, Horizontal: ${horizontalOffset}, Corner: ${corner}`);
-                            
-                            // Use RAF for smooth transition
-                            requestAnimationFrame(() => {
-                                attribution.classList.remove('hidden');
-                                // Log position after unhiding
-                                const newComputedStyle = window.getComputedStyle(attribution);
-                                Log.info(`Attribution position after unhiding - Top: ${newComputedStyle.top}, Left: ${newComputedStyle.left}, Bottom: ${newComputedStyle.bottom}, Right: ${newComputedStyle.right}`);
-                            });
+                    if (this.config.absoluteOptions.blurContainer) {
+                        if (this.config.absoluteOptions.side === "horizontal") {
+                            blurContainer.style.width = `${this.config.absoluteOptions.blurContainer.width}px`;
+                            blurContainer.style.height = 'auto';
+                        } else {
+                            blurContainer.style.height = `${this.config.absoluteOptions.blurContainer.height}px`;
+                            blurContainer.style.width = 'auto';
                         }
-                    } else {
-                        Log.error('Failed to calculate valid image dimensions');
                     }
-                });
-                
-                img.remove();
-                Log.info('Image load handler complete');
-            };
-            
-            imageContainer.appendChild(img);
-
-            // Important: Append the imageContainer to the wrapper
-            wrapper.appendChild(imageContainer);
-
-            // Set absolute size if needed
-            if (this.config.displayStyle === "absolute" && this.config.absoluteOptions.enabled) {
-                if (this.config.absoluteOptions.side === "horizontal") {
-                    wrapper.style.setProperty('--absolute-width', 
-                        `${this.config.absoluteOptions.size}px`);
+                    
+                    blurContainer.appendChild(photoBack);
+                    blurContainer.appendChild(photoCurrent);
+                    wrapper.appendChild(blurContainer);
                 } else {
-                    wrapper.style.setProperty('--absolute-height', 
-                        `${this.config.absoluteOptions.size}px`);
+                    wrapper.appendChild(photoBack);
+                    wrapper.appendChild(photoCurrent);
                 }
+            } else {
+                wrapper.appendChild(photoBack);
+                wrapper.appendChild(photoCurrent);
             }
-        } else {
-            wrapper.innerHTML = "Error loading photo";
         }
-
+        
         return wrapper;
+    },
+
+    displayPhoto: function(photo, wrapper) {
+        console.log("Preparing to show photo:", photo.key);
+        const hidden = new Image();
+        hidden.src = this.file(`cache/${photo.key}`);
+        console.log("Full image URL:", hidden.src);
+        
+        hidden.onload = () => {
+            const photoCurrent = wrapper.querySelector('.photo-current');
+            const photoBack = wrapper.querySelector('.photo-back');
+            
+            if (photoCurrent) {
+                if (this.imagesDisplayed === 0) {
+                    // First image - update attribution before showing image
+                    this.updateAttribution(photo, wrapper);
+                }
+
+                // Update both current and background images
+                photoCurrent.style.backgroundImage = `url(${hidden.src})`;
+                if (photoBack) {
+                    photoBack.style.backgroundImage = `url(${hidden.src})`;
+                }
+                
+                // Set background-size based on display style
+                if (this.config.displayStyle === "wallpaper" || this.config.displayStyle === "fill") {
+                    photoCurrent.style.backgroundSize = "cover";
+                } else {
+                    photoCurrent.style.backgroundSize = "contain";
+                }
+
+                if (this.imagesDisplayed > 0) {
+                    // Not the first image - wait for transition
+                    photoCurrent.addEventListener('transitionend', () => {
+                        this.updateAttribution(photo, wrapper);
+                    }, { once: true });
+                }
+
+                this.imagesDisplayed++;
+            }
+
+            // Schedule next photo
+            if (this.timer) clearTimeout(this.timer);
+            this.timer = setTimeout(() => {
+                this.updatePhoto();
+            }, this.config.displayDurationSeconds * 1000);
+        };
+
+        hidden.onerror = () => {
+            console.error("Failed to load image:", photo.key);
+            this.updatePhoto();
+        };
     },
 
     file: function(relativePath) {
         // Helper function to convert module paths to absolute URLs
         relativePath = relativePath.replace(/^\//, '');
-        return this.data.path + '/' + relativePath;
+        return this.data.path + relativePath;
     },
 
     getStyles: function() {
@@ -430,14 +379,80 @@ Module.register("MMM-S3Photos", {
     },
 
     scheduleNextPhoto: function() {
-        if (this.displayTimer) {
-            clearTimeout(this.displayTimer);
+        Log.info("Scheduling next photo");
+        if (this.timer) {
+            clearTimeout(this.timer);
         }
         
-        this.displayTimer = setTimeout(() => {
-            this.updateDom(1000); // 1 second transition
-            this.scheduleNextPhoto();
+        this.timer = setTimeout(() => {
+            this.updatePhoto();
         }, this.config.displayDurationSeconds * 1000);
+        
+        // Show first photo immediately
+        if (!this.currentPhoto) {
+            this.updatePhoto();
+        }
+    },
+
+    updatePhoto: function() {
+        console.log("Updating photo");
+        if (!this.photos || this.photos.length === 0) {
+            console.log("No photos available to display");
+            return;
+        }
+
+        let nextIndex;
+        switch (this.config.displayOrder) {
+            case "random_dedupe":
+                // Initialize tracking Set if it doesn't exist
+                if (!this.shownPhotos) {
+                    console.log("Initializing shown photos tracking");
+                    this.shownPhotos = new Set();
+                }
+
+                // Get array of available (unshown) indices
+                const availableIndices = Array.from(Array(this.photos.length).keys())
+                    .filter(i => !this.shownPhotos.has(i));
+                
+                console.log("Available photos:", availableIndices.length, "Total photos:", this.photos.length);
+                
+                // If no photos are available, reset tracking
+                if (availableIndices.length === 0) {
+                    console.log("All photos shown, resetting tracking");
+                    this.shownPhotos.clear();
+                    // Recalculate available indices
+                    nextIndex = Math.floor(Math.random() * this.photos.length);
+                } else {
+                    // Pick random photo from available indices
+                    const randomAvailable = Math.floor(Math.random() * availableIndices.length);
+                    nextIndex = availableIndices[randomAvailable];
+                }
+                
+                console.log("Selected new photo index:", nextIndex);
+                this.shownPhotos.add(nextIndex);
+                break;
+            case "random":
+                nextIndex = Math.floor(Math.random() * this.photos.length);
+                break;
+            case "newest_first":
+                nextIndex = (this.currentIndex + 1) % this.photos.length;
+                break;
+            case "oldest_first":
+                nextIndex = this.currentIndex > 0 ? this.currentIndex - 1 : this.photos.length - 1;
+                break;
+            default:
+                nextIndex = (this.currentIndex + 1) % this.photos.length;
+        }
+
+        this.currentIndex = nextIndex;
+        const nextPhoto = this.photos[nextIndex];
+        console.log("Loading photo:", nextPhoto.key);
+
+        // Update DOM
+        const moduleWrapper = document.getElementById(this.identifier);
+        if (moduleWrapper) {
+            this.displayPhoto(nextPhoto, moduleWrapper);
+        }
     },
 
     suspend: function() {
@@ -446,6 +461,56 @@ Module.register("MMM-S3Photos", {
 
     resume: function() {
         // Handle module resume
+    },
+
+    updateAttribution: function(photo, wrapper) {
+        // Remove existing attributions
+        const existingAttributions = wrapper.querySelectorAll('.attribution-container');
+        Array.from(existingAttributions).forEach(attribution => attribution.remove());
+
+        // Add new attribution if enabled
+        if (this.config.attribution && this.config.attribution.enabled) {
+            const folder = photo.key.split('/')[0];
+            const text = this.config.attribution.attributions[folder];
+            
+            if (text) {
+                const attributionContainer = document.createElement("div");
+                attributionContainer.className = "attribution-container";
+                attributionContainer.setAttribute('data-relative', 
+                    this.config.attribution.relativeTo || 'display');
+                
+                const attribution = document.createElement("div");
+                attribution.className = "attribution";
+                attribution.textContent = text;
+
+                if (this.config.attribution.position === "dynamic") {
+                    if (!this.currentCorner) {
+                        this.currentCorner = "top-left";
+                    } else {
+                        switch (this.currentCorner) {
+                            case "top-left":
+                                this.currentCorner = "top-right";
+                                break;
+                            case "top-right":
+                                this.currentCorner = "bottom-right";
+                                break;
+                            case "bottom-right":
+                                this.currentCorner = "bottom-left";
+                                break;
+                            case "bottom-left":
+                                this.currentCorner = "top-left";
+                                break;
+                        }
+                    }
+                    attributionContainer.classList.add(this.currentCorner);
+                } else {
+                    attributionContainer.classList.add(this.config.attribution.corner || "bottom-right");
+                }
+
+                attributionContainer.appendChild(attribution);
+                wrapper.appendChild(attributionContainer);
+            }
+        }
     }
 
 });

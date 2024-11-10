@@ -1,182 +1,193 @@
+/* Base styles */
 .MMM-S3Photos {
-    position: absolute;
+    position: relative;
+    min-width: 300px;
+    min-height: 300px;
+}
+
+/* Fullscreen/Wallpaper mode - fills entire viewport */
+.region.fullscreen .MMM-S3Photos {
+    position: static;
     top: 0;
     left: 0;
-    right: 0;
-    bottom: 0;
+    width: 100vw;
+    height: 100vh;
+}
+
+/* Fill mode - fills container */
+.MMM-S3Photos.fill {
+    position: relative;
+    width: 100%;
+    height: 100%;
+}
+
+/* Fit-display mode */
+.region.fullscreen .MMM-S3Photos.fit-display {
+    position: static;
+    width: 100vw;
+    height: 100vh;
+}
+
+.MMM-S3Photos.fit-display .photo-current {
+    background-size: contain !important;
+}
+
+/* Absolute mode */
+.MMM-S3Photos.absolute {
+    position: relative;
+    overflow: hidden;
     display: flex;
     justify-content: center;
     align-items: center;
-    transition: background-image 0.3s ease-in-out;
-    z-index: 0;
+    transition: width var(--transition-duration, 2s) ease-in-out,
+                height var(--transition-duration, 2s) ease-in-out;
 }
 
-.MMM-S3Photos.wallpaper {
-    background-size: cover;
-    background-repeat: no-repeat;
-    background-position: center;
-}
-
-.MMM-S3Photos.fit-region {
-    background-size: contain;
-    background-repeat: no-repeat;
-    background-position: center;
-    z-index: 0;
-}
-
-.MMM-S3Photos.blur {
-    background-size: cover;
-    background-position: center;
-    filter: blur(10px) brightness(0.5);
-}
-
-.MMM-S3Photos .image-container {
-    position: relative;
-    width: 100%;
-    height: 100%;
-    background-position: center;
-    background-repeat: no-repeat;
-    background-size: contain;
-    transition: background-image 0.3s ease-in-out;
-    z-index: 1;
-}
-
-.MMM-S3Photos.wallpaper .image-container {
-    background-size: cover;
-    background-position: center;
-    background-repeat: no-repeat;
-}
-
-.MMM-S3Photos.fit-region .image-container {
-    background-size: contain;
-    background-position: center;
-    background-repeat: no-repeat;
-}
-
-.MMM-S3Photos.absolute .image-container {
-    position: relative;
-    background-repeat: no-repeat;
-    background-position: center;
-    background-size: contain;
-}
-
-.MMM-S3Photos.absolute.horizontal .image-container {
-    width: var(--absolute-width);
+.MMM-S3Photos.absolute.horizontal {
+    width: var(--absolute-width) !important;
     height: auto;
-    max-height: 100vh;
-    aspect-ratio: var(--image-ratio);
 }
 
-.MMM-S3Photos.absolute.vertical .image-container {
-    height: var(--absolute-height);
+.MMM-S3Photos.absolute.vertical {
     width: auto;
-    max-width: 100vw;
-    aspect-ratio: var(--image-ratio);
+    height: var(--absolute-height) !important;
 }
 
-.MMM-S3Photos.absolute .blur-container {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    width: var(--blur-width);
-    height: var(--blur-height);
+/* Blur container for absolute mode */
+.blur-enabled {
+    position: relative;
+    width: var(--blur-width, 500px);
+    height: var(--blur-height, 500px);
     overflow: hidden;
     z-index: 0;
+    display: flex;
+    justify-content: center;
+    align-items: center;
 }
 
-.MMM-S3Photos.absolute .blur-container .blur-background {
+/* Absolute mode */
+.MMM-S3Photos.absolute .photo-current {
     position: absolute;
-    width: 100%;
-    height: 100%;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: var(--absolute-width);
+    height: var(--absolute-height);
+    background-size: contain;
+    z-index: 0;
+}
+
+.MMM-S3Photos.absolute .photo-back {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: var(--absolute-width);
+    height: var(--absolute-height);
     background-size: cover;
-    background-position: center;
-    filter: blur(10px) brightness(0.5);
+    filter: blur(10px) brightness(40%);
+    transition: background-image var(--transition-duration, 2s) ease-in-out,
+                width var(--transition-duration, 2s) ease-in-out,
+                height var(--transition-duration, 2s) ease-in-out;
+    z-index: 0;
 }
 
-.s3-photo {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-}
-
-/* Blur background for non-absolute modes */
-.MMM-S3Photos .blur-background {
+/* Photo containers */
+.photo-back, .photo-current {
     position: absolute;
     top: 0;
     left: 0;
     right: 0;
     bottom: 0;
+    background-position: center;
+    background-repeat: no-repeat;
+}
+
+.photo-back {
+    position: absolute;
+    inset: 0;
     background-size: cover;
     background-position: center;
-    filter: blur(10px) brightness(0.5);
+    background-repeat: no-repeat;
+    filter: blur(10px) brightness(40%);
+    transition: background-image var(--transition-duration, 2s) ease-in-out,
+                width var(--transition-duration, 2s) ease-in-out,
+                height var(--transition-duration, 2s) ease-in-out;
     z-index: 0;
 }
 
-/* Base attribution styles */
-.attribution {
+.photo-current {
     position: absolute;
-    padding: 5px 10px;
-    background-color: rgba(0, 0, 0, 0.6);
-    color: white;
-    border-radius: 15px;
-    font-size: 14px;
+    top: 10px;
+    left: 10px;
+    right: 10px;
+    bottom: 10px;
+    background-position: center;
+    background-repeat: no-repeat;
+    transition: background-image var(--transition-duration, 2s) ease-in-out,
+                width var(--transition-duration, 2s) ease-in-out,
+                height var(--transition-duration, 2s) ease-in-out;
+    z-index: 0;
+}
+
+.photo-current.animated {
+    animation-name: photoTransition;
+    animation-duration: var(--transition-duration, 2s);
+}
+
+@keyframes photoTransition {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+/* Background sizing based on mode */
+.MMM-S3Photos.wallpaper .photo-current,
+.MMM-S3Photos.fill .photo-current {
+    background-size: cover;
+}
+
+.MMM-S3Photos.fit-display .photo-current {
+    background-size: contain;
+}
+
+/* Attribution styling */
+.attribution-container {
+    position: absolute;
+    margin: 10px;
+    background-color: rgba(0,0,0,0.5);
+    padding: 10px;
+    border-radius: 36px;
     z-index: 2;
 }
 
-/* Attribution positioning relative to display */
-.MMM-S3Photos .attribution[data-relative="display"] {
-    position: fixed;
-    &.top-left { top: 10px; left: 10px; }
-    &.top-right { top: 10px; right: 10px; }
-    &.bottom-left { bottom: 10px; left: 10px; }
-    &.bottom-right { bottom: 10px; right: 10px; }
-}
-
-/* Attribution positioning relative to image */
-.MMM-S3Photos .attribution[data-relative="image"] {
-    --image-offset: 10px;
+/* Display-relative positioning */
+.attribution-container[data-relative="display"] {
     position: absolute;
-    transform: none;
-    transition: opacity 0.3s ease-in-out;
-    
-    &.top-left {
-        top: calc((100% - var(--image-height)) / 2 + var(--image-offset));
-        left: calc((100% - var(--image-width)) / 2 + var(--image-offset));
-    }
-    &.top-right {
-        top: calc((100% - var(--image-height)) / 2 + var(--image-offset));
-        right: calc((100% - var(--image-width)) / 2 + var(--image-offset));
-    }
-    &.bottom-left {
-        bottom: calc((100% - var(--image-height)) / 2 + var(--image-offset));
-        left: calc((100% - var(--image-width)) / 2 + var(--image-offset));
-    }
-    &.bottom-right {
-        bottom: calc((100% - var(--image-height)) / 2 + var(--image-offset));
-        right: calc((100% - var(--image-width)) / 2 + var(--image-offset));
-    }
+    &.top-left { top: 0; left: 0; }
+    &.top-right { top: 0; right: 0; }
+    &.bottom-left { bottom: 0; left: 0; }
+    &.bottom-right { bottom: 0; right: 0; }
 }
 
-/* Ensure the image container bounds are respected */
-.MMM-S3Photos.fit-region img {
-    max-width: 100%;
-    max-height: 100%;
-    object-fit: contain;
-    display: block;
+/* Image-relative positioning */
+.attribution-container[data-relative="image"] {
+    position: absolute;
+    transform: translate(0, 0);
 }
 
-.MMM-S3Photos.updating .attribution {
-    opacity: 0;
-    transition: opacity 0.3s ease-out;
+/* Container-relative positioning */
+.attribution-container[data-relative="container"] {
+    position: absolute;
+    &.top-left { top: 0; left: 0; }
+    &.top-right { top: 0; right: 0; }
+    &.bottom-left { bottom: 0; left: 0; }
+    &.bottom-right { bottom: 0; right: 0; }
 }
 
-.MMM-S3Photos .attribution.hidden {
-    opacity: 0;
-    transition: none;
-}
-
-.MMM-S3Photos .attribution {
-    opacity: 1;
-    transition: opacity 0.3s ease-in;
+.attribution {
+    font-size: 18px;
+    line-height: 100%;
+    color: #FFF;
+    padding: 6px 12px;
+    text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.5);
 }

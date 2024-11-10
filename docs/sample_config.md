@@ -12,10 +12,11 @@ Add the module to your `config.js` file:
         displayDurationSeconds: 60,  // How long to show each photo
         
         // Display Style Options
-        displayStyle: "fit-region", // Choose one:
-                                    // "wallpaper" (stretches to fill region) will add a duplicate option called "fill" in a future release and sunset this option for better clarity.
-                                    // "fit-region" (maintains aspect ratio)
-                                    // "absolute" (fixed size based on one edge)
+        displayStyle: "absolute",   // Choose one:
+                                    // "wallpaper" (fills entire screen)
+                                    // "fill" (fills container region)
+                                    // "fit-display" (maintains aspect ratio while filling display)
+                                    // "absolute" (fixed size)
         applyBlur: false,           // Adds a blurred background in empty spaces
         // Only used when displayStyle is "absolute", omit if not using absolute mode
         absoluteOptions: {           
@@ -35,21 +36,18 @@ Add the module to your `config.js` file:
                                     // "oldest_first" (chronological, oldest photos first)
         // Attribution Settings
         attribution: {
-            enabled: false,          // Set to true to show photo information based on folder names
+            enabled: true,          
             attributions: {
-                "vacation_folder": "Summer 2023",     // In this example: "vacation_folder" is the folder name and "Summer 2023" will be displayed.
-                "family_folder": "Family Photos"      // In this example: "family_folder" is the folder name and "Family Photos" will be displayed.
+                "samples": "Sample Photos by Pexels",     // In this example: "vacation_folder" is the folder name and "Summer 2023" will be displayed.
+                "selfies": "Selfieshot Selfies"      // In this example: "family_folder" is the folder name and "Family Photos" will be displayed.
             },
-            position: "static",      // Position of atribution pill label 
-                                     // "static" = fixed position
-                                     // "dynamic" = randomly changes position, truelly random may repeate for sevaral photos in a row
-            corner: "bottom-right"   // Choose one (ignored if position is "dynamic"):
-                                     // "top-left"
-                                     // "top-right"
-                                     // "bottom-left"
-                                     // "bottom-right"
-            relativeTo: "display"    // "display" or "image" 
-                                     // defines where the corners for attribution are relative to. in wallpaper mode the image is the wallpaper you should select "display" or the pill will be at the original corners of the photo pre-streching. this will be fixed in a future release.
+            position: "static",      // "static" or "dynamic"
+            corner: "bottom-right", // Only used if position is "static"
+                                   // "top-left", "top-right", "bottom-left", "bottom-right"
+            relativeTo: "display"   // Choose one:
+                                   // "display" (relative to screen)
+                                   // "image" (relative to photo boundaries)
+                                   // "container" (relative to MM region)
         },
         selfieUploads: false,  // Whether to process and upload photos from MMM-Selfieshot
         selfieFolder: "selfies" // S3 folder name for selfieshot uploads
