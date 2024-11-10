@@ -3,6 +3,7 @@ Module.register("MMM-S3Photos", {
         syncTimeHours: 1, // How often to run the Lambda function and run the delta logic
         cacheLifeDays: 0, // 0 = never clean cache, >0 = days between cache purges
         displayDurationSeconds: 30, // How long (seconds) to display each photo
+        transitionDurationSeconds: 2, // How long (seconds) the transition animation takes
         displayStyle: "wallpaper", // Choose one:
                                   // "wallpaper" (fills entire screen)
                                   // "fill" (fills container region)

@@ -6,6 +6,7 @@ Add the module to your `config.js` file:
 {
     module: "MMM-S3Photos",
     position: "fullscreen_below",    // standard Magic mirror regions (fullscreen_below should be used if setting wallpaper as display style)
+    transitionDurationSeconds: 1.5, // How long (seconds) the transition animation takes
     config: {
         syncTimeHours: 1,           // How often to check for new photos (1 = hourly)
         cacheLifeDays: 0,           // 0 = never clean cache, otherwise days between cache purges
