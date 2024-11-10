@@ -52,7 +52,7 @@ I'm a overworked, and underpaid, tech worker in the analytics and intelligence i
  - 1. Included in this modules is a utility script to copy files to the cache folder and also upload files from a USB storage device to the S3 bucket. As a backup.
  - 2. Manually upload files to the S3 bucket using the AWS console (Website UI).
  - 3. Use the AWS CLI to upload files to the S3 bucket. The user and access keys that are created as part of the setup script have the necessary permissions to directly upload files to the S3 bucket. You can pair this something like onedrive or dropbox and a simple cronjob to automatically sync your photos to the S3 bucket.
- - 4. If you are looking for a more hands off app like experiance, there are a number of 3rd party apps that allow you to sync photos to an S3 bucket. I dont spesifically endorse these but they seem to be popular. -- [immich](https://immich.app/) [photosync](https://www.photosync-app.com/home)
+ - 4. If you are looking for a more hands off app like experiance, there are a number of 3rd party apps that allow you to sync photos to an S3 bucket. I dont spesifically endorse these but they seem to be popular:  [immich](https://immich.app/) , [photosync](https://www.photosync-app.com/home)
  - 5. if you are up for more of a techincal approach you can set up a SNS topic and Amazon SES and simply email photos as attachments to your s3 bucket. 
 
 # AWS Costs
