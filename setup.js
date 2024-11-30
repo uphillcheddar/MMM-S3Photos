@@ -7,6 +7,8 @@ const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
 const { CloudFormationClient, DescribeStacksCommand } = require('@aws-sdk/client-cloudformation');
 const awsCredentials = require('./utils/awsCredentials');
 const { EventEmitter } = require('events');
+const { IAMClient, DetachUserPolicyCommand, AttachUserPolicyCommand, ListAttachedUserPoliciesCommand, CreatePolicyCommand } = require('@aws-sdk/client-iam');
+const { STSClient, GetCallerIdentityCommand } = require('@aws-sdk/client-sts');
 
 // Set max listeners to 15 to prevent warnings
 EventEmitter.defaultMaxListeners = 15;
@@ -74,6 +76,17 @@ const questions = [
         name: 'region',
         message: 'Enter your AWS Region example: us-east-1:',
         when: (answers) => answers.hasAwsAccount && (!answers.useExistingCreds || !fs.existsSync('./local_aws-credentials'))
+    },
+    {
+        type: 'confirm',
+        name: 'lockDownUser',
+        message: 'Would you like to apply security restrictions to your IAM user? (Highly Recommended)\n' +
+                 '  • Will removes admin access from this IAM-user\n' +
+                 '  • Limits IAM user access to only the S3 bucket and required Lambda functions\n' +
+                 '  • Reduces risk if credentials are exposed\n' +
+                 '\n  WARNING: This can only be reversed through the AWS Console',
+        default: false,
+        when: (answers) => answers.hasAwsAccount
     }
 ];
 
@@ -255,6 +268,15 @@ const main = async () => {
         // Generate configuration files
         await generateConfigFiles(credentials);
 
+        // After infrastructure deployment and before final config generation
+        if (answers.lockDownUser) {
+            const username = await getCurrentUser(credentials);
+            console.log(`Detected IAM user: ${username}`);
+            await updateUserPermissions(credentials, username);
+        } else {
+            console.log('You chose not to restrict the IAM user. It is highly recommended to limit this user\'s permissions to reduce risk. Please refer to the README for guidance.');
+        }
+
     } catch (error) {
         console.error('Setup failed:', error);
         process.exit(1);
@@ -306,7 +328,7 @@ const deployInfrastructure = async (credentials) => {
     if (!loadEnv(true)) {  // Pass true for setup mode
         throw new Error('Failed to load environment variables');
     }
-
+ 
     try {
         execSync(
             `cdk bootstrap aws://${process.env.AWS_ACCOUNT_ID}/${process.env.AWS_REGION} --toolkit-stack-name ${bootstrapStackName} --qualifier mmm`, 
@@ -404,4 +426,74 @@ const generateConfigFiles = async (credentials) => {
     console.log('Highly recommend you modify the IAM user that is used by this module to be a more restricted user now that everything is deployed. See readme for more details.');
 };
 
+async function updateUserPermissions(credentials, username) {
+    await awsCredentials.withCredentials(async () => {
+        const iamClient = new IAMClient({ region: process.env.AWS_REGION });
+
+        try {
+            // List current policies
+            const listPoliciesCommand = new ListAttachedUserPoliciesCommand({
+                UserName: username
+            });
+            const { AttachedPolicies } = await iamClient.send(listPoliciesCommand);
+
+            // Find and detach admin policy
+            const adminPolicy = AttachedPolicies.find(policy => 
+                policy.PolicyArn.includes('AdministratorAccess')
+            );
+
+            if (adminPolicy) {
+                console.log('Removing administrator access...');
+                await iamClient.send(new DetachUserPolicyCommand({
+                    UserName: username,
+                    PolicyArn: adminPolicy.PolicyArn
+                }));
+            }
+
+            // Create and attach minimal policy
+            console.log('Applying minimal access policy...');
+            const minimalPolicyDocument = fs.readFileSync(
+                path.join(__dirname, 'minimal-policy.json'),
+                'utf8'
+            );
+
+            // Create new policy and attach it
+            const policyName = 'MMMS3PhotosMinimalAccess';
+            const createPolicyCommand = new CreatePolicyCommand({
+                PolicyName: policyName,
+                PolicyDocument: minimalPolicyDocument
+            });
+            
+            const { Policy } = await iamClient.send(createPolicyCommand);
+            
+            await iamClient.send(new AttachUserPolicyCommand({
+                UserName: username,
+                PolicyArn: Policy.Arn
+            }));
+
+            console.log('Successfully updated user permissions to minimal access.');
+            console.log('Note: This change can only be undone through the AWS Console.');
+
+        } catch (error) {
+            console.error('Error updating user permissions:', error);
+            throw error;
+        }
+    });
+}
+// Add this function to get the current IAM user
+async function getCurrentUser() {
+    return awsCredentials.withCredentials(async () => {
+        const stsClient = new STSClient({ region: process.env.AWS_REGION });
+
+        try {
+            const response = await stsClient.send(new GetCallerIdentityCommand({}));
+            // The ARN format is: arn:aws:iam::ACCOUNT-ID:user/USERNAME
+            const arnParts = response.Arn.split('/');
+            return arnParts[arnParts.length - 1]; // Gets the username
+        } catch (error) {
+            console.error('Error getting current user:', error);
+            throw error;
+        }
+    });
+}
 main();

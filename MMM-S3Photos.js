@@ -238,12 +238,21 @@ Module.register("MMM-S3Photos", {
                 const blurContainer = document.createElement("div");
                 blurContainer.className = "blur-enabled";
                 
+                // Add logging to verify values
+                console.log('Blur container config:', this.config.absoluteOptions.blurContainer);
+                
                 // Set blur container dimensions
                 if (this.config.absoluteOptions.blurContainer) {
                     blurContainer.style.setProperty('--blur-width', 
                         `${this.config.absoluteOptions.blurContainer.width}px`);
                     blurContainer.style.setProperty('--blur-height', 
                         `${this.config.absoluteOptions.blurContainer.height}px`);
+                    
+                    // Add logging to verify the styles were set
+                    console.log('Blur container styles:', {
+                        width: blurContainer.style.getPropertyValue('--blur-width'),
+                        height: blurContainer.style.getPropertyValue('--blur-height')
+                    });
                 }
                 
                 const photoBack = document.createElement("div");
@@ -329,7 +338,6 @@ Module.register("MMM-S3Photos", {
             
             if (photoCurrent) {
                 if (this.imagesDisplayed === 0) {
-                    // First image - update attribution before showing image
                     this.updateAttribution(photo, wrapper);
                 }
 
@@ -339,8 +347,17 @@ Module.register("MMM-S3Photos", {
                     photoBack.style.backgroundImage = `url(${hidden.src})`;
                 }
                 
-                // Set background-size based on display style
-                if (this.config.displayStyle === "wallpaper" || this.config.displayStyle === "fill") {
+                // For absolute mode, always fill the specified dimension
+                if (this.config.displayStyle === "absolute") {
+                    photoCurrent.style.backgroundSize = "100% 100%";
+                    if (this.config.absoluteOptions.side === "horizontal") {
+                        photoCurrent.style.width = `${this.config.absoluteOptions.size}px`;
+                        photoCurrent.style.height = "auto";
+                    } else {
+                        photoCurrent.style.height = `${this.config.absoluteOptions.size}px`;
+                        photoCurrent.style.width = "auto";
+                    }
+                } else if (this.config.displayStyle === "wallpaper" || this.config.displayStyle === "fill") {
                     photoCurrent.style.backgroundSize = "cover";
                 } else {
                     photoCurrent.style.backgroundSize = "contain";

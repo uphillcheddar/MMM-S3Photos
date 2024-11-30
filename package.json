@@ -1,6 +1,6 @@
 {
   "name": "mmm-s3photos",
-  "version": "1.5.1",
+  "version": "1.6.1",
   "description": "MagicMirror module for displaying photos from AWS S3",
   "repository": {
     "type": "git",
@@ -23,6 +23,7 @@
     "@aws-sdk/client-cloudformation": "^3.0.0",
     "@aws-sdk/client-lambda": "^3.0.0",
     "@aws-sdk/client-s3": "^3.0.0",
+    "@aws-sdk/client-iam": "^3.0.0",
     "aws-cdk": "^2.0.0",
     "aws-cdk-lib": "^2.0.0",
     "constructs": "^10.0.0",

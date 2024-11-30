@@ -71,10 +71,19 @@
     left: 50%;
     top: 50%;
     transform: translate(-50%, -50%);
-    width: var(--absolute-width);
-    height: var(--absolute-height);
-    background-size: contain;
+    background-position: center;
+    background-repeat: no-repeat;
     z-index: 0;
+}
+
+.MMM-S3Photos.absolute.horizontal .photo-current {
+    width: var(--absolute-width);
+    height: auto;
+}
+
+.MMM-S3Photos.absolute.vertical .photo-current {
+    height: var(--absolute-height);
+    width: auto;
 }
 
 .MMM-S3Photos.absolute .photo-back {
@@ -82,8 +91,8 @@
     left: 50%;
     top: 50%;
     transform: translate(-50%, -50%);
-    width: var(--absolute-width);
-    height: var(--absolute-height);
+    width: var(--blur-width);
+    height: var(--blur-height);
     background-size: cover;
     filter: blur(10px) brightness(40%);
     transition: background-image var(--transition-duration, 2s) ease-in-out,
