@@ -347,15 +347,21 @@ Module.register("MMM-S3Photos", {
                     photoBack.style.backgroundImage = `url(${hidden.src})`;
                 }
                 
-                // For absolute mode, always fill the specified dimension
+                // For absolute mode, calculate dimensions based on aspect ratio
                 if (this.config.displayStyle === "absolute") {
-                    photoCurrent.style.backgroundSize = "100% 100%";
+                    const aspectRatio = hidden.width / hidden.height;
+                    const size = this.config.absoluteOptions.size;
+
                     if (this.config.absoluteOptions.side === "horizontal") {
-                        photoCurrent.style.width = `${this.config.absoluteOptions.size}px`;
-                        photoCurrent.style.height = "auto";
+                        const calculatedHeight = Math.round(size / aspectRatio);
+                        photoCurrent.style.width = `${size}px`;
+                        photoCurrent.style.height = `${calculatedHeight}px`;
+                        photoCurrent.style.backgroundSize = "100% 100%";
                     } else {
-                        photoCurrent.style.height = `${this.config.absoluteOptions.size}px`;
-                        photoCurrent.style.width = "auto";
+                        const calculatedWidth = Math.round(size * aspectRatio);
+                        photoCurrent.style.height = `${size}px`;
+                        photoCurrent.style.width = `${calculatedWidth}px`;
+                        photoCurrent.style.backgroundSize = "100% 100%";
                     }
                 } else if (this.config.displayStyle === "wallpaper" || this.config.displayStyle === "fill") {
                     photoCurrent.style.backgroundSize = "cover";

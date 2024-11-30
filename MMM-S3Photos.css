@@ -43,15 +43,6 @@
                 height var(--transition-duration, 2s) ease-in-out;
 }
 
-.MMM-S3Photos.absolute.horizontal {
-    width: var(--absolute-width) !important;
-    height: auto;
-}
-
-.MMM-S3Photos.absolute.vertical {
-    width: auto;
-    height: var(--absolute-height) !important;
-}
 
 /* Blur container for absolute mode */
 .blur-enabled {
@@ -74,16 +65,6 @@
     background-position: center;
     background-repeat: no-repeat;
     z-index: 0;
-}
-
-.MMM-S3Photos.absolute.horizontal .photo-current {
-    width: var(--absolute-width);
-    height: auto;
-}
-
-.MMM-S3Photos.absolute.vertical .photo-current {
-    height: var(--absolute-height);
-    width: auto;
 }
 
 .MMM-S3Photos.absolute .photo-back {
