@@ -273,7 +273,27 @@ const main = async () => {
             const username = await getCurrentUser(credentials);
             console.log(`Detected IAM user: ${username}`);
             await updateUserPermissions(credentials, username);
+            console.log('.');
+            console.log('.');
+            console.log('.');
+            console.log('Setup complete! AWS Cloud Formation has been deployed log and outputs here:');
+            console.log('- local_aws-credentials (AWS credentials DO NOT DELETE)');
+            console.log('- aws-resources.json (AWS resource configuration DO NOT DELETE)');
+            console.log('.');
+            console.log('.');
+            console.log('Sample files have been uploaded to the S3 bucket. To delete them run the below command after uploading your own photos:');
+            console.log(' node delete_samples.js');
         } else {
+            console.log('.');
+            console.log('.');
+            console.log('.');
+            console.log('Setup complete! AWS Cloud Formation has been deployed log and outputs here:');
+            console.log('- local_aws-credentials (AWS credentials DO NOT DELETE)');
+            console.log('- aws-resources.json (AWS resource configuration DO NOT DELETE)');
+            console.log('.');
+            console.log('.');
+            console.log('Sample files have been uploaded to the S3 bucket. To delete them run the below command after uploading your own photos:');
+            console.log(' node delete_samples.js');
             console.log('You chose not to restrict the IAM user. It is highly recommended to limit this user\'s permissions to reduce risk. Please refer to the README for guidance.');
         }
 
@@ -407,23 +427,7 @@ const generateConfigFiles = async (credentials) => {
             JSON.stringify(minimalPolicy, null, 2)
         );
     });
-    console.log('.');
-    console.log('.');
-    console.log('.');
-    console.log('Setup complete! AWS Cloud Formation has been deployed log and outputs here:');
-    console.log('- local_aws-credentials (AWS credentials DO NOT DELETE)');
-    console.log('- aws-resources.json (AWS resource configuration DO NOT DELETE)');
-    console.log('.');
-    console.log('.');
-    console.log('Sample files have been uploaded to the S3 bucket. To delete them run the below command after uploading your own photos:');
-    console.log(' node delete_samples.js');
-    console.log('.');
-    console.log('.');
-    console.log('For your convenience a script has been added to help upload photos to the S3 bucket and copy them to the local cache folder. connect usb stick and run:');
-    console.log(' node upload_from_usb.js');
-    console.log('.');
-    console.log('.');
-    console.log('Highly recommend you modify the IAM user that is used by this module to be a more restricted user now that everything is deployed. See readme for more details.');
+
 };
 
 async function updateUserPermissions(credentials, username) {
@@ -470,10 +474,12 @@ async function updateUserPermissions(credentials, username) {
                 UserName: username,
                 PolicyArn: Policy.Arn
             }));
-
+            console.log('*');
+            console.log('*');
             console.log('Successfully updated user permissions to minimal access.');
             console.log('Note: This change can only be undone through the AWS Console.');
-
+            console.log('*');
+            console.log('*');
         } catch (error) {
             console.error('Error updating user permissions:', error);
             throw error;

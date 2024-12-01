@@ -8,14 +8,14 @@ class AWSCredentialsManager {
 
     loadCredentials() {
         try {
-            console.log('Loading AWS credentials...');
+            
             if (!fs.existsSync(this.credentialsPath)) {
                 console.error('AWS credentials file not found at:', this.credentialsPath);
                 return false;
             }
 
             const credentialsContent = fs.readFileSync(this.credentialsPath, 'utf8');
-            console.log('Credentials file found and read');
+            
             
             const credentials = {};
             
@@ -32,7 +32,7 @@ class AWSCredentialsManager {
             process.env.AWS_REGION = credentials.REGION;
             process.env.AWS_ACCOUNT_ID = credentials.ACCOUNT_ID;
 
-            console.log('Credentials loaded successfully');
+            
             return true;
         } catch (error) {
             console.error('Error loading AWS credentials:', error);
