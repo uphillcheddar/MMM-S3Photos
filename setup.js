@@ -385,8 +385,6 @@ const generateConfigFiles = async (credentials) => {
         // Extract values from stack outputs
         const config = {
             s3Bucket: outputs.find(o => o.OutputKey === 'S3PhotosBucketName').OutputValue,
-            s3Region: credentials.region,
-            accountId: credentials.accountId,
             lambdaFunction: outputs.find(o => o.OutputKey === 'S3PhotosHandlerName').OutputValue
         };
         
@@ -417,7 +415,7 @@ const generateConfigFiles = async (credentials) => {
                 {
                     Effect: "Allow",
                     Action: ["lambda:InvokeFunction"],
-                    Resource: `arn:aws:lambda:${config.s3Region}:${config.accountId}:function:${config.lambdaFunction}`
+                    Resource: `arn:aws:lambda:${process.env.AWS_REGION}:${process.env.AWS_ACCOUNT_ID}:function:${config.lambdaFunction}`
                 }
             ]
         };
