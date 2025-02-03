@@ -1,6 +1,6 @@
 {
   "name": "mmm-s3photos",
-  "version": "1.6.2",
+  "version": "1.6.3",
   "description": "MagicMirror module for displaying photos from AWS S3",
   "repository": {
     "type": "git",
@@ -29,7 +29,8 @@
     "constructs": "^10.0.0",
     "dotenv": "^16.0.0",
     "inquirer": "^8.2.4",
-    "uuid": "^9.0.0"
+    "uuid": "^9.0.0",
+    "@aws-sdk/client-sts":"^3.738.0""
   },
   "author": "Uphillcheddar",
   "license": "MIT"
