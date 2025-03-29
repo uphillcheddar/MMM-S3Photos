@@ -5,12 +5,11 @@ const os = require('os');
 const path = require('path');
 const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
 const { CloudFormationClient, DescribeStacksCommand } = require('@aws-sdk/client-cloudformation');
-const awsCredentials = require('./utils/awsCredentials');
-const { EventEmitter } = require('events');
 const { IAMClient, DetachUserPolicyCommand, AttachUserPolicyCommand, ListAttachedUserPoliciesCommand, CreatePolicyCommand } = require('@aws-sdk/client-iam');
 const { STSClient, GetCallerIdentityCommand } = require('@aws-sdk/client-sts');
+const awsCredentials = require('./utils/awsCredentials');
+const { EventEmitter } = require('events');
 
-// Set max listeners to 15 to prevent warnings
 EventEmitter.defaultMaxListeners = 15;
 
 const isCommandAvailable = (command) => {
@@ -22,15 +21,125 @@ const isCommandAvailable = (command) => {
     }
 };
 
+const isRoot = () => process.getuid && process.getuid() === 0;
+
 const checkWorkingDirectory = () => {
-    // Get the directory name of the current working directory
     const currentDir = path.basename(process.cwd());
-    
     if (currentDir !== 'MMM-S3Photos') {
         console.error('\x1b[31mError: This script must be run from the MMM-S3Photos module directory\x1b[0m');
-        console.log('\nPlease use cd to change to the MMM-S3Photos module directory and then run this script again');
         process.exit(1);
     }
+};
+
+const checkSudoPrivileges = () => {
+    if ((os.platform() === 'linux' || os.platform() === 'darwin') && !isRoot()) {
+        console.error('\x1b[31mError: Some operations require sudo privileges\x1b[0m');
+        console.log('\x1b[33mPlease run the setup script with sudo:\x1b[0m sudo node setup.js');
+        process.exit(1);
+    }
+};
+
+const promptInstallTool = async (toolName, installFn) => {
+    const { install } = await inquirer.prompt([
+        {
+            type: 'confirm',
+            name: 'install',
+            message: `${toolName} is not installed. Would you like to install it now?`,
+            default: true
+        }
+    ]);
+    if (install) installFn();
+    else {
+        console.error(`\x1b[31m${toolName} is required. Exiting setup.\x1b[0m`);
+        process.exit(1);
+    }
+};
+
+const checkRequiredTools = async () => {
+    if (!isCommandAvailable('aws')) await promptInstallTool('AWS CLI', installAwsCli);
+    if (!isCommandAvailable('cdk')) await promptInstallTool('AWS CDK', installAwsCdk);
+};
+
+const installAwsCli = () => {
+    console.log('Installing AWS CLI...');
+    if (os.platform() === 'linux') {
+        execSync('curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"', { stdio: 'inherit' });
+        execSync('unzip awscliv2.zip', { stdio: 'inherit' });
+        execSync('sudo ./aws/install', { stdio: 'inherit' });
+        fs.rmSync('awscliv2.zip', { force: true });
+        fs.rmSync('./aws', { recursive: true, force: true });
+    } else if (os.platform() === 'darwin') {
+        execSync('curl "https://awscli.amazonaws.com/AWSCLIV2.pkg" -o "AWSCLIV2.pkg"', { stdio: 'inherit' });
+        execSync('sudo installer -pkg AWSCLIV2.pkg -target /', { stdio: 'inherit' });
+        fs.rmSync('AWSCLIV2.pkg', { force: true });
+    }
+};
+
+const installAwsCdk = () => {
+    console.log('Installing AWS CDK globally...');
+    execSync('npm install -g aws-cdk', { stdio: 'inherit' });
+};
+
+const checkCdkVersionAndPrompt = async () => {
+    let cliVersion = 'unknown';
+    let libVersion = 'unknown';
+
+    try {
+        cliVersion = execSync('cdk --version').toString().trim().split(' ')[0];
+    } catch {
+        return;
+    }
+
+    try {
+        libVersion = require('aws-cdk-lib/package.json').version;
+    } catch (e) {
+        console.error('Unable to determine CDK library version.');
+        throw e;
+    }
+
+    const isIncompatible = cliVersion.startsWith('2.') && libVersion.startsWith('2.') && !cliVersion.startsWith('2.100');
+    if (isIncompatible) {
+        console.log('\x1b[33m⚠️  CDK CLI and library versions are incompatible!\x1b[0m\n');
+        console.log(`Detected CLI: ${cliVersion} | Required lib: ${libVersion}`);
+
+        const { cdkVersionChoice } = await inquirer.prompt([
+            {
+                type: 'list',
+                name: 'cdkVersionChoice',
+                message: 'Choose how to proceed:',
+                choices: [
+                    { name: 'Abort install and exit', value: 'abort' },
+                    { name: 'Show update command and exit', value: 'show' },
+                    { name: 'Automatically update global CDK CLI to match', value: 'auto' }
+                ]
+            }
+        ]);
+
+        if (cdkVersionChoice === 'abort') {
+            console.log('Aborting setup.');
+            process.exit(1);
+        } else if (cdkVersionChoice === 'show') {
+            console.log(`Run: \x1b[32msudo npm install -g aws-cdk@${libVersion}\x1b[0m`);
+            process.exit(1);
+        } else if (cdkVersionChoice === 'auto') {
+            try {
+                const cliTargetVersion = getCompatibleCdkCliVersion(libVersion);
+                execSync(`npm install -g aws-cdk@${cliTargetVersion}`, { stdio: 'inherit' });
+
+            } catch (e) {
+                console.error('\x1b[31mCDK CLI upgrade failed. Try manually with sudo.\x1b[0m');
+                console.log(`sudo npm install -g aws-cdk@${libVersion}`);
+                process.exit(1);
+            }
+        }
+    }
+};
+const getCompatibleCdkCliVersion = (libVersion) => {
+    const [major, minor] = libVersion.split('.').map(Number);
+    if (major === 2 && minor >= 179) {
+        return 'latest'; // post-split CLI
+    }
+    return libVersion; // pre-split, still in sync
 };
 
 const questions = [
@@ -90,230 +199,26 @@ const questions = [
     }
 ];
 
-
-const getBucketName = async (region) => {
-    if (!region) {
-        console.error('Region not provided to getBucketName');
-        return null;
-    }
-
-    try {
-        const cloudFormationClient = new CloudFormationClient({ region });
-        const command = new DescribeStacksCommand({ StackName: 'S3PhotosStack' });
-        const data = await cloudFormationClient.send(command);
-        const outputs = data.Stacks[0].Outputs;
-        const output = outputs.find(output => output.OutputKey === 'S3PhotosBucketName');
-        return output ? output.OutputValue : null;
-    } catch (err) {
-        console.error('Error retrieving stack outputs:', err);
-        return null;
-    }
+const setAwsEnvironmentVariables = (credentials) => {
+    process.env.AWS_ACCESS_KEY_ID = credentials.accessKeyId;
+    process.env.AWS_SECRET_ACCESS_KEY = credentials.secretAccessKey;
+    process.env.AWS_REGION = credentials.region;
+    process.env.AWS_ACCOUNT_ID = credentials.accountId;
 };
 
-const installAwsCli = () => {
-    console.log('Installing AWS CLI...');
-    if (os.platform() === 'linux') {
-        execSync('curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"', { stdio: 'inherit' });
-        execSync('unzip awscliv2.zip', { stdio: 'inherit' });
-        execSync('sudo ./aws/install', { stdio: 'inherit' });
-    } else if (os.platform() === 'darwin') {
-        execSync('curl "https://awscli.amazonaws.com/AWSCLIV2.pkg" -o "AWSCLIV2.pkg"', { stdio: 'inherit' });
-        execSync('sudo installer -pkg AWSCLIV2.pkg -target /', { stdio: 'inherit' });
-    }
-};
-
-const installAwsCdk = () => {
-    console.log('Installing AWS CDK...');
-    execSync('npm install -g aws-cdk', { stdio: 'inherit' });
-};
-
-const uploadSampleFile = async (bucketName) => {
-    console.log('Uploading sample file to S3 bucket...');
-    
-    await awsCredentials.withCredentials(async () => {
-        const s3Client = new S3Client({ region: process.env.AWS_REGION });
-        const filePath1 = path.join(__dirname, 'cache', 'samples', 'pexels-dan-mooham.jpg');
-        const fileContent1 = fs.readFileSync(filePath1);
-        const filePath2 = path.join(__dirname, 'cache', 'samples', 'pexels-matreding.jpg');
-        const fileContent2 = fs.readFileSync(filePath2);  
-        const filePath3 = path.join(__dirname, 'cache', 'samples', 'pexels-pixabay.jpg');
-        const fileContent3 = fs.readFileSync(filePath3);    
-
-        const params1 = {
-            Bucket: bucketName,
-            Key: 'samples/pexels-dan-mooham.jpg',
-            Body: fileContent1,
-            ContentType: 'image/jpeg'
-        };
-        const params2 = {
-            Bucket: bucketName,
-            Key: 'samples/pexels-matreding.jpg',
-            Body: fileContent2,
-            ContentType: 'image/jpeg'
-        };
-        const params3 = {
-            Bucket: bucketName,
-            Key: 'samples/pexels-pixabay.jpg',
-            Body: fileContent3,
-            ContentType: 'image/jpeg'
-        };
-
-        try {
-            await s3Client.send(new PutObjectCommand(params1));
-            console.log('First Sample file uploaded successfully.');
-        } catch (err) {
-            console.error('Error uploading sample file:', err);
-            throw err;
-        }
-        try {
-            await s3Client.send(new PutObjectCommand(params2));
-            console.log('Second Sample file uploaded successfully.');
-        } catch (err) {
-            console.error('Error uploading sample file:', err);
-            throw err;
-        }
-        try {
-            await s3Client.send(new PutObjectCommand(params3));
-            console.log('Second Sample file uploaded successfully.');
-        } catch (err) {
-            console.error('Error uploading sample file:', err);
-            throw err;
-        }
-    });
-};
-
-const setupModulePermissions = async () => {
-    console.log('Setting up module permissions...');
-    
-    const modulePath = path.join(__dirname, '..');
-    const cachePath = path.join(modulePath, 'cache');
-    
-    try {
-        // Create cache directory if it doesn't exist
-        if (!fs.existsSync(cachePath)) {
-            fs.mkdirSync(cachePath, { recursive: true });
-        }
-        
-        // Set directory permissions (755 = rwxr-xr-x)
-        fs.chmodSync(cachePath, '755');
-        
-        // Create an empty photos.json file with proper permissions
-        const photosJsonPath = path.join(cachePath, 'photos.json');
-        if (!fs.existsSync(photosJsonPath)) {
-            fs.writeFileSync(photosJsonPath, '[]');
-            fs.chmodSync(photosJsonPath, '644');  // 644 = rw-r--r--
-        }
-        
-        console.log('Module permissions set successfully.');
-    } catch (error) {
-        console.error('Error setting module permissions:', error);
-        throw error;
-    }
-};
-
-// Add after other requires
-const isRoot = () => process.getuid && process.getuid() === 0;
-
-const checkSudoPrivileges = () => {
-    // Only check for sudo on Linux/Mac systems
-    if (os.platform() !== 'linux' && os.platform() !== 'darwin') {
-        return;
-    }
-
-    // Check if AWS CLI is already installed
-    const awsInstalled = isCommandAvailable('aws');
-    
-    if (!awsInstalled && !isRoot()) {
-        console.error('\x1b[31mError: AWS CLI installation requires sudo privileges\x1b[0m');
-        console.log('\nPlease run the setup script with sudo:');
-        console.log('\x1b[33msudo node setup.js\x1b[0m\n');
-        process.exit(1);
-    }
-};
-
-const main = async () => {
-    try {
-        checkWorkingDirectory();
-        checkSudoPrivileges();
-        
-        const answers = await inquirer.prompt(questions);
-        
-        // Early exit if no AWS account
-        if (!answers.hasAwsAccount) {
-            console.log('Please create an AWS account and then run this script again.');
-            return;
-        }
-
-        // Handle credentials
-        let credentials;
-        if (answers.useExistingCreds && fs.existsSync('./local_aws-credentials')) {
-            credentials = parseCredentialsFile('./local_aws-credentials');
-        } else {
-            credentials = {
-                accessKeyId: answers.accessKeyId,
-                secretAccessKey: answers.secretAccessKey,
-                region: answers.region,
-                accountId: answers.accountId
-            };
-            // Save new credentials
-            saveCredentialsFile('./local_aws-credentials', credentials);
-        }
-
-        // Set environment variables
-        setAwsEnvironmentVariables(credentials);
-
-        // Deploy infrastructure
-        await deployInfrastructure(credentials);
-
-        // Generate configuration files
-        await generateConfigFiles(credentials);
-
-        // After infrastructure deployment and before final config generation
-        if (answers.lockDownUser) {
-            const username = await getCurrentUser(credentials);
-            console.log(`Detected IAM user: ${username}`);
-            await updateUserPermissions(credentials, username);
-            console.log('.');
-            console.log('.');
-            console.log('.');
-            console.log('Setup complete! AWS Cloud Formation has been deployed log and outputs here:');
-            console.log('- local_aws-credentials (AWS credentials DO NOT DELETE)');
-            console.log('- aws-resources.json (AWS resource configuration DO NOT DELETE)');
-            console.log('.');
-            console.log('.');
-            console.log('Sample files have been uploaded to the S3 bucket. To delete them run the below command after uploading your own photos:');
-            console.log(' node delete_samples.js');
-        } else {
-            console.log('.');
-            console.log('.');
-            console.log('.');
-            console.log('Setup complete! AWS Cloud Formation has been deployed log and outputs here:');
-            console.log('- local_aws-credentials (AWS credentials DO NOT DELETE)');
-            console.log('- aws-resources.json (AWS resource configuration DO NOT DELETE)');
-            console.log('.');
-            console.log('.');
-            console.log('Sample files have been uploaded to the S3 bucket. To delete them run the below command after uploading your own photos:');
-            console.log(' node delete_samples.js');
-            console.log('You chose not to restrict the IAM user. It is highly recommended to limit this user\'s permissions to reduce risk. Please refer to the README for guidance.');
-        }
-
-    } catch (error) {
-        console.error('Setup failed:', error);
-        process.exit(1);
-    }
-};
-
-// Helper functions
 const parseCredentialsFile = (filePath) => {
     const content = fs.readFileSync(filePath, 'utf8');
     return content.split('\n').reduce((acc, line) => {
         const [key, value] = line.split('=').map(s => s.trim());
         if (key && value) {
-            acc[key.replace('aws_', '')] = value;
+            const cleanKey = key.replace(/^aws_/, '');
+            if (cleanKey === 'account_id') acc.accountId = value;
+            else acc[cleanKey] = value;
         }
         return acc;
     }, {});
 };
+
 
 const saveCredentialsFile = (filePath, credentials) => {
     const content = `[default]
@@ -325,77 +230,79 @@ account_id = ${credentials.accountId}
     fs.writeFileSync(filePath, content);
 };
 
-const setAwsEnvironmentVariables = (credentials) => {
-    process.env.AWS_ACCESS_KEY_ID = credentials.accessKeyId;
-    process.env.AWS_SECRET_ACCESS_KEY = credentials.secretAccessKey;
-    process.env.AWS_REGION = credentials.region;
-    process.env.AWS_ACCOUNT_ID = credentials.accountId;
+const uploadSampleFile = async (bucketName) => {
+    console.log('Uploading sample files to S3...');
+    await awsCredentials.withCredentials(async () => {
+        const s3Client = new S3Client({ region: process.env.AWS_REGION });
+        const sampleFiles = [
+            'pexels-dan-mooham.jpg',
+            'pexels-matreding.jpg',
+            'pexels-pixabay.jpg'
+        ];
+
+        for (const file of sampleFiles) {
+            const filePath = path.join(__dirname, 'cache', 'samples', file);
+            const content = fs.readFileSync(filePath);
+
+            const params = {
+                Bucket: bucketName,
+                Key: `samples/${file}`,
+                Body: content,
+                ContentType: 'image/jpeg'
+            };
+
+            try {
+                await s3Client.send(new PutObjectCommand(params));
+                console.log(`Uploaded ${file}`);
+            } catch (err) {
+                console.error(`Failed to upload ${file}:`, err);
+                throw err;
+            }
+        }
+    });
 };
 
 const deployInfrastructure = async (credentials) => {
-    // Install dependencies if needed
-    if (!isCommandAvailable('aws')) installAwsCli();
-    if (!isCommandAvailable('cdk')) installAwsCdk();
-    
+    const loadEnv = require('./utils/loadEnv');
     console.log('Installing project dependencies...');
     execSync('npm install', { stdio: 'inherit' });
 
+    if (!loadEnv(true)) throw new Error('Failed to load environment variables');
+
     const bootstrapStackName = 'mmm-s3photos-bootstrap';
-    console.log('Bootstrapping environment...');
-    
-    // Load environment variables in setup mode
-    const loadEnv = require('./utils/loadEnv');
-    if (!loadEnv(true)) {  // Pass true for setup mode
-        throw new Error('Failed to load environment variables');
-    }
- 
+
     try {
-        execSync(
-            `cdk bootstrap aws://${process.env.AWS_ACCOUNT_ID}/${process.env.AWS_REGION} --toolkit-stack-name ${bootstrapStackName} --qualifier mmm`, 
-            { 
-                stdio: 'inherit',
-                env: process.env
-            }
-        );
+        execSync(`cdk bootstrap aws://${credentials.accountId}/${credentials.region} --toolkit-stack-name ${bootstrapStackName} --qualifier mmm`, {
+            stdio: 'inherit',
+            env: process.env
+        });
     } catch (error) {
-        if (!error.message.includes('already bootstrapped')) {
-            throw error;
-        }
+        if (!error.message.includes('already bootstrapped')) throw error;
         console.log('Environment already bootstrapped. Proceeding...');
     }
 
     console.log('Deploying CDK stack...');
-    execSync(
-        `cdk deploy S3PhotosStack --toolkit-stack-name ${bootstrapStackName} --require-approval never`, 
-        { 
-            stdio: 'inherit',
-            env: process.env
-        }
-    );
+    execSync(`cdk deploy S3PhotosStack --toolkit-stack-name ${bootstrapStackName} --require-approval never`, {
+        stdio: 'inherit',
+        env: process.env
+    });
 };
 
 const generateConfigFiles = async (credentials) => {
     await awsCredentials.withCredentials(async () => {
-        // Get stack outputs for resources
-        const cloudFormationClient = new CloudFormationClient({ region: credentials.region });
+        const cfClient = new CloudFormationClient({ region: credentials.region });
         const command = new DescribeStacksCommand({ StackName: 'S3PhotosStack' });
-        const data = await cloudFormationClient.send(command);
+        const data = await cfClient.send(command);
         const outputs = data.Stacks[0].Outputs;
-        
-        // Extract values from stack outputs
+
         const config = {
             s3Bucket: outputs.find(o => o.OutputKey === 'S3PhotosBucketName').OutputValue,
             lambdaFunction: outputs.find(o => o.OutputKey === 'S3PhotosHandlerName').OutputValue
         };
-        
-        // Save aws-resources.json
-        const resourcesPath = path.join(__dirname, 'aws-resources.json');
-        fs.writeFileSync(resourcesPath, JSON.stringify(config, null, 2));
 
-        // Upload sample files using the bucket name from config
+        fs.writeFileSync(path.join(__dirname, 'aws-resources.json'), JSON.stringify(config, null, 2));
         await uploadSampleFile(config.s3Bucket);
 
-        // Generate minimal IAM policy using values from config
         const minimalPolicy = {
             Version: "2012-10-17",
             Statement: [
@@ -415,89 +322,98 @@ const generateConfigFiles = async (credentials) => {
                 {
                     Effect: "Allow",
                     Action: ["lambda:InvokeFunction"],
-                    Resource: `arn:aws:lambda:${process.env.AWS_REGION}:${process.env.AWS_ACCOUNT_ID}:function:${config.lambdaFunction}`
+                    Resource: `arn:aws:lambda:${credentials.region}:${credentials.accountId}:function:${config.lambdaFunction}`
                 }
             ]
         };
-        
-        fs.writeFileSync(
-            path.join(__dirname, 'minimal-policy.json'),
-            JSON.stringify(minimalPolicy, null, 2)
-        );
-    });
 
+        fs.writeFileSync(path.join(__dirname, 'minimal-policy.json'), JSON.stringify(minimalPolicy, null, 2));
+    });
 };
 
-async function updateUserPermissions(credentials, username) {
+const updateUserPermissions = async (credentials, username) => {
     await awsCredentials.withCredentials(async () => {
         const iamClient = new IAMClient({ region: process.env.AWS_REGION });
 
-        try {
-            // List current policies
-            const listPoliciesCommand = new ListAttachedUserPoliciesCommand({
-                UserName: username
-            });
-            const { AttachedPolicies } = await iamClient.send(listPoliciesCommand);
+        const attached = await iamClient.send(new ListAttachedUserPoliciesCommand({ UserName: username }));
+        const adminPolicy = attached.AttachedPolicies.find(p => p.PolicyArn.includes('AdministratorAccess'));
 
-            // Find and detach admin policy
-            const adminPolicy = AttachedPolicies.find(policy => 
-                policy.PolicyArn.includes('AdministratorAccess')
-            );
-
-            if (adminPolicy) {
-                console.log('Removing administrator access...');
-                await iamClient.send(new DetachUserPolicyCommand({
-                    UserName: username,
-                    PolicyArn: adminPolicy.PolicyArn
-                }));
-            }
-
-            // Create and attach minimal policy
-            console.log('Applying minimal access policy...');
-            const minimalPolicyDocument = fs.readFileSync(
-                path.join(__dirname, 'minimal-policy.json'),
-                'utf8'
-            );
-
-            // Create new policy and attach it
-            const policyName = 'MMMS3PhotosMinimalAccess';
-            const createPolicyCommand = new CreatePolicyCommand({
-                PolicyName: policyName,
-                PolicyDocument: minimalPolicyDocument
-            });
-            
-            const { Policy } = await iamClient.send(createPolicyCommand);
-            
-            await iamClient.send(new AttachUserPolicyCommand({
+        if (adminPolicy) {
+            console.log('Removing AdministratorAccess policy...');
+            await iamClient.send(new DetachUserPolicyCommand({
                 UserName: username,
-                PolicyArn: Policy.Arn
+                PolicyArn: adminPolicy.PolicyArn
             }));
-            console.log('*');
-            console.log('*');
-            console.log('Successfully updated user permissions to minimal access.');
-            console.log('Note: This change can only be undone through the AWS Console.');
-            console.log('*');
-            console.log('*');
-        } catch (error) {
-            console.error('Error updating user permissions:', error);
-            throw error;
         }
+
+        console.log('Attaching minimal IAM policy...');
+        const policyDoc = fs.readFileSync(path.join(__dirname, 'minimal-policy.json'), 'utf8');
+
+        const { Policy } = await iamClient.send(new CreatePolicyCommand({
+            PolicyName: 'MMMS3PhotosMinimalAccess',
+            PolicyDocument: policyDoc
+        }));
+
+        await iamClient.send(new AttachUserPolicyCommand({
+            UserName: username,
+            PolicyArn: Policy.Arn
+        }));
+
+        console.log('✔ Minimal policy applied.');
     });
-}
-// Add this function to get the current IAM user
-async function getCurrentUser() {
+};
+
+const getCurrentUser = async () => {
     return awsCredentials.withCredentials(async () => {
         const stsClient = new STSClient({ region: process.env.AWS_REGION });
-
-        try {
-            const response = await stsClient.send(new GetCallerIdentityCommand({}));
-            // The ARN format is: arn:aws:iam::ACCOUNT-ID:user/USERNAME
-            const arnParts = response.Arn.split('/');
-            return arnParts[arnParts.length - 1]; // Gets the username
-        } catch (error) {
-            console.error('Error getting current user:', error);
-            throw error;
-        }
+        const identity = await stsClient.send(new GetCallerIdentityCommand({}));
+        return identity.Arn.split('/').pop();
     });
-}
+};
+
+const main = async () => {
+    try {
+        checkWorkingDirectory();
+        checkSudoPrivileges();
+        await checkRequiredTools();
+        await checkCdkVersionAndPrompt();
+
+        const answers = await inquirer.prompt(questions);
+        if (!answers.hasAwsAccount) {
+            console.log('Please create an AWS account and then run this script again.');
+            return;
+        }
+
+        let credentials;
+        if (answers.useExistingCreds && fs.existsSync('./local_aws-credentials')) {
+            credentials = parseCredentialsFile('./local_aws-credentials');
+        } else {
+            credentials = {
+                accessKeyId: answers.accessKeyId,
+                secretAccessKey: answers.secretAccessKey,
+                region: answers.region,
+                accountId: answers.accountId
+            };
+            saveCredentialsFile('./local_aws-credentials', credentials);
+        }
+
+        setAwsEnvironmentVariables(credentials);
+        await deployInfrastructure(credentials);
+        await generateConfigFiles(credentials);
+
+        if (answers.lockDownUser) {
+            const username = await getCurrentUser();
+            console.log(`Detected IAM user: ${username}`);
+            await updateUserPermissions(credentials, username);
+        }
+
+        console.log('\n✅ Setup complete!');
+        console.log('Your AWS infrastructure is deployed.');
+        console.log('Sample files are uploaded. Run `node delete_samples.js` to remove them.');
+    } catch (err) {
+        console.error('❌ Setup failed:', err);
+        process.exit(1);
+    }
+};
+
 main();
