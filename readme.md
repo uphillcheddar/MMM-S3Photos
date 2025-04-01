@@ -114,8 +114,9 @@ Example details:
    ```bash
    npm install
    ```
- * run setup script - be patient this can take a while (0-10 minutes depending on aws region)
+ * run setup script - be patient this can take a while (0-10 minutes depending on aws region).
    ```bash
+   # The script will make sure that you have aws cli and aws cdk installed. if not, it will ask if you want them installed (choosing no cancels setup)
    cd ~/MagicMirror/modules/MMM-S3Photos
    sudo node ./setup.js
    ```
