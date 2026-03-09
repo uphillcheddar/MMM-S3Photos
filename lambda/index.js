@@ -1,4 +1,4 @@
-const { S3Client, ListObjectsV2Command } = require('@aws-sdk/client-s3');
+const { S3Client, paginateListObjectsV2 } = require('@aws-sdk/client-s3');
 
 const s3Client = new S3Client({ region: process.env.AWS_REGION });
 
@@ -16,24 +16,28 @@ exports.handler = async (event) => {
             throw new Error('BUCKET_NAME environment variable not set');
         }
 
-        // Scan bucket
-        const params = { Bucket: bucketName };
-        const data = await s3Client.send(new ListObjectsV2Command(params));
-        
-        if (!data || !Array.isArray(data.Contents)) {
-            return {
-                toDownload: [],
-                toDelete: []
-            };
+        // Scan bucket with Pagination (Handles > 1,000 files)
+        const bucketFiles = [];
+        const paginatorConfig = {
+            client: s3Client,
+            pageSize: 1000 // Requests 1,000 items at a time from S3
+        };
+
+        const paginator = paginateListObjectsV2(paginatorConfig, { Bucket: bucketName });
+
+        // Iterate through all pages provided by S3
+        for await (const page of paginator) {
+            if (page.Contents) {
+                const mappedPage = page.Contents.map(item => ({
+                    key: item.Key,
+                    lastModified: item.LastModified.toISOString(),
+                    size: item.Size,
+                    folder: item.Key.split('/')[0]
+                }));
+                bucketFiles.push(...mappedPage);
+            }
         }
 
-        // Process bucket contents
-        const bucketFiles = data.Contents.map(item => ({
-            key: item.Key,
-            lastModified: item.LastModified.toISOString(),
-            size: item.Size,
-            folder: item.Key.split('/')[0]
-        }));
         const bucketKeys = new Set(bucketFiles.map(item => item.key));
 
         // Determine changes
