@@ -12,6 +12,8 @@ const { EventEmitter } = require('events');
 
 EventEmitter.defaultMaxListeners = 15;
 
+const BACKUP_FILE = path.join(__dirname, 'mmm-s3photos-backup.json');
+
 const isCommandAvailable = (command) => {
     try {
         execSync(`command -v ${command}`, { stdio: 'ignore' });
@@ -156,35 +158,28 @@ const questions = [
         when: (answers) => !answers.hasAwsAccount
     },
     {
-        type: 'confirm',
-        name: 'useExistingCreds',
-        message: 'An existing AWS credentials file was found. Do you want to use the existing credentials?',
-        when: () => fs.existsSync('./local_aws-credentials'),
-        default: true
-    },
-    {
         type: 'input',
         name: 'accountId',
         message: 'Enter your AWS Account ID:',
-        when: (answers) => answers.hasAwsAccount && (!answers.useExistingCreds || !fs.existsSync('./local_aws-credentials'))
+        when: (answers) => answers.hasAwsAccount
     },
     {
         type: 'input',
         name: 'accessKeyId',
         message: 'Enter your AWS Access Key ID:',
-        when: (answers) => answers.hasAwsAccount && (!answers.useExistingCreds || !fs.existsSync('./local_aws-credentials'))
+        when: (answers) => answers.hasAwsAccount
     },
     {
         type: 'input',
         name: 'secretAccessKey',
         message: 'Enter your AWS Secret Access Key:',
-        when: (answers) => answers.hasAwsAccount && (!answers.useExistingCreds || !fs.existsSync('./local_aws-credentials'))
+        when: (answers) => answers.hasAwsAccount
     },
     {
         type: 'input',
         name: 'region',
         message: 'Enter your AWS Region example: us-east-1:',
-        when: (answers) => answers.hasAwsAccount && (!answers.useExistingCreds || !fs.existsSync('./local_aws-credentials'))
+        when: (answers) => answers.hasAwsAccount
     },
     {
         type: 'confirm',
@@ -206,28 +201,51 @@ const setAwsEnvironmentVariables = (credentials) => {
     process.env.AWS_ACCOUNT_ID = credentials.accountId;
 };
 
-const parseCredentialsFile = (filePath) => {
-    const content = fs.readFileSync(filePath, 'utf8');
-    return content.split('\n').reduce((acc, line) => {
-        const [key, value] = line.split('=').map(s => s.trim());
-        if (key && value) {
-            const cleanKey = key.replace(/^aws_/, '');
-            if (cleanKey === 'account_id') acc.accountId = value;
-            else acc[cleanKey] = value;
-        }
-        return acc;
-    }, {});
+
+
+
+const saveBackupFile = (credentials, awsResources) => {
+    const backup = {
+        createdAt: new Date().toISOString(),
+        credentials,
+        awsResources
+    };
+    fs.writeFileSync(BACKUP_FILE, JSON.stringify(backup, null, 2));
+    console.log('✔ Installation backup saved to mmm-s3photos-backup.json');
 };
 
+const checkForBackupAndRestore = async () => {
+    if (!fs.existsSync(BACKUP_FILE)) return false;
 
-const saveCredentialsFile = (filePath, credentials) => {
-    const content = `[default]
-aws_access_key_id = ${credentials.accessKeyId}
-aws_secret_access_key = ${credentials.secretAccessKey}
-region = ${credentials.region}
-account_id = ${credentials.accountId}
-`;
-    fs.writeFileSync(filePath, content);
+    let backup;
+    try {
+        backup = JSON.parse(fs.readFileSync(BACKUP_FILE, 'utf8'));
+    } catch {
+        console.warn('\x1b[33m⚠️  Backup file found but could not be read. Proceeding with fresh install...\x1b[0m\n');
+        return false;
+    }
+
+    const { restoreFromBackup } = await inquirer.prompt([{
+        type: 'confirm',
+        name: 'restoreFromBackup',
+        message: 'A previous installation backup was found. Would you like to restore from it instead of installing fresh?\n' +
+                 '  • Skips CDK deployment (avoids trying to deploy with previously locked down permissions)\n' +
+                 '  • Restores credentials and AWS resource configuration from backup',
+        default: true
+    }]);
+
+    if (!restoreFromBackup) return false;
+
+    setAwsEnvironmentVariables(backup.credentials);
+
+    console.log('\n✔ Restored credentials and AWS resource configuration.');
+    console.log(`  S3 Bucket:  ${backup.awsResources.s3Bucket}`);
+    console.log(`  Lambda:     ${backup.awsResources.lambdaFunction}`);
+    if (backup.createdAt) {
+        console.log(`  Backed up:  ${new Date(backup.createdAt).toLocaleString()}`);
+    }
+
+    return true;
 };
 
 const uploadSampleFile = async (bucketName) => {
@@ -331,7 +349,7 @@ const generateConfigFiles = async (credentials) => {
     });
 };
 
-const updateUserPermissions = async (credentials, username) => {
+const updateUserPermissions = async (username) => {
     await awsCredentials.withCredentials(async () => {
         const iamClient = new IAMClient({ region: process.env.AWS_REGION });
 
@@ -375,6 +393,13 @@ const main = async () => {
     try {
         checkWorkingDirectory();
         checkSudoPrivileges();
+
+        const restored = await checkForBackupAndRestore();
+        if (restored) {
+            console.log('\n Setup restored from backup!');
+            return;
+        }
+
         await checkRequiredTools();
         await checkCdkVersionAndPrompt();
 
@@ -384,27 +409,24 @@ const main = async () => {
             return;
         }
 
-        let credentials;
-        if (answers.useExistingCreds && fs.existsSync('./local_aws-credentials')) {
-            credentials = parseCredentialsFile('./local_aws-credentials');
-        } else {
-            credentials = {
-                accessKeyId: answers.accessKeyId,
-                secretAccessKey: answers.secretAccessKey,
-                region: answers.region,
-                accountId: answers.accountId
-            };
-            saveCredentialsFile('./local_aws-credentials', credentials);
-        }
+        const credentials = {
+            accessKeyId: answers.accessKeyId,
+            secretAccessKey: answers.secretAccessKey,
+            region: answers.region,
+            accountId: answers.accountId
+        };
 
         setAwsEnvironmentVariables(credentials);
         await deployInfrastructure(credentials);
         await generateConfigFiles(credentials);
 
+        const awsResources = JSON.parse(fs.readFileSync(path.join(__dirname, 'aws-resources.json'), 'utf8'));
+        saveBackupFile(credentials, awsResources);
+
         if (answers.lockDownUser) {
             const username = await getCurrentUser();
             console.log(`Detected IAM user: ${username}`);
-            await updateUserPermissions(credentials, username);
+            await updateUserPermissions(username);
         }
 
         console.log('\n✅ Setup complete!');

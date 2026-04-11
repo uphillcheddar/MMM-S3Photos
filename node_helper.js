@@ -72,6 +72,84 @@ module.exports = NodeHelper.create({
         });
     },
 
+    /**
+     * One-time migration for users upgrading from a version that did not
+     * create a backup file.  If the legacy credential files exist
+     * but no backup has been made yet, we create one now so that future
+     * restores and runtime credential loading use the encrypted backup.
+     */
+    async migrateToBackupIfNeeded() {
+        const backupPath = path.join(this.moduleDir, 'mmm-s3photos-backup.json');
+        const credsPath  = path.join(this.moduleDir, 'local_aws-credentials');
+        const resPath    = path.join(this.moduleDir, 'aws-resources.json');
+
+        if (fs.existsSync(backupPath)) return; // never overwrite
+        if (!fs.existsSync(credsPath) || !fs.existsSync(resPath)) return; // nothing to migrate
+
+        try {
+            // Parse the legacy credentials file (key=value format)
+            const rawCreds = fs.readFileSync(credsPath, 'utf8')
+                .split('\n')
+                .reduce((acc, line) => {
+                    const [key, value] = line.split('=').map(s => s.trim());
+                    if (key && value) {
+                        const clean = key.replace(/^aws_/, '');
+                        acc[clean] = value;
+                    }
+                    return acc;
+                }, {});
+
+            const awsResources = JSON.parse(fs.readFileSync(resPath, 'utf8'));
+
+            const backup = {
+                createdAt:   new Date().toISOString(),
+                migratedAt:  new Date().toISOString(),
+                credentials: {
+                    accessKeyId:     rawCreds.access_key_id,
+                    secretAccessKey: rawCreds.secret_access_key,
+                    region:          rawCreds.region,
+                    accountId:       rawCreds.account_id
+                },
+                awsResources
+            };
+
+            fs.writeFileSync(backupPath, JSON.stringify(backup, null, 2));
+            Log.info('MMM-S3Photos: Migrated credentials to encrypted backup file.');
+        } catch (err) {
+            Log.warn('MMM-S3Photos: Could not migrate credentials to backup file:', err.message);
+        }
+    },
+
+    /**
+     * If aws-resources.json is newer than the backup file (e.g. after a CDK
+     * redeploy that ran outside of setup.js), pull the updated resource names
+     * into the backup so runtime always reads from one authoritative source.
+     */
+    refreshBackupIfStale() {
+        const backupPath = path.join(this.moduleDir, 'mmm-s3photos-backup.json');
+        const resPath    = path.join(this.moduleDir, 'aws-resources.json');
+
+        if (!fs.existsSync(backupPath) || !fs.existsSync(resPath)) return;
+
+        const backupMtime = fs.statSync(backupPath).mtime;
+        const resMtime    = fs.statSync(resPath).mtime;
+
+        if (resMtime <= backupMtime) return; // backup is already current
+
+        try {
+            const backup       = JSON.parse(fs.readFileSync(backupPath, 'utf8'));
+            const newResources = JSON.parse(fs.readFileSync(resPath, 'utf8'));
+
+            backup.awsResources = newResources;
+            backup.updatedAt    = new Date().toISOString();
+
+            fs.writeFileSync(backupPath, JSON.stringify(backup, null, 2));
+            Log.info('MMM-S3Photos: Backup refreshed from updated aws-resources.json (CDK redeploy detected)');
+        } catch (err) {
+            Log.warn('MMM-S3Photos: Could not refresh backup from aws-resources.json:', err.message);
+        }
+    },
+
     async initializeModule() {
         if (this.initialized) {
             Log.info('Module already initialized');
@@ -86,6 +164,14 @@ module.exports = NodeHelper.create({
         try {
             this.initializationInProgress = true;
             Log.info('Starting module initialization');
+
+            // Create encrypted backup from legacy files if this is the first
+            // run after an upgrade from a version that did not produce one.
+            await this.migrateToBackupIfNeeded();
+
+            // If aws-resources.json was refreshed by a CDK redeploy after the
+            // backup was created, pull the new resource names into the backup.
+            this.refreshBackupIfStale();
 
             // First ensure environment variables are loaded from local files
             const envLoaded = await this.ensureEnvironment();

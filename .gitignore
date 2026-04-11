@@ -9,6 +9,8 @@ cdk.out/
 
 # AWS credentials
 local_aws-credentials
+mmm-s3photos-backup.json
+aws-resources.json
 
 # Lambda zip file
 lambda.zip
