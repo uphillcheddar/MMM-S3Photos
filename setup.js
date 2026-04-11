@@ -65,6 +65,10 @@ const checkRequiredTools = async () => {
 const installAwsCli = () => {
     console.log('Installing AWS CLI...');
     if (os.platform() === 'linux') {
+        if (!isCommandAvailable('unzip')) {
+            console.log('Installing unzip...');
+            execSync('apt-get install -y unzip', { stdio: 'inherit' });
+        }
         execSync('curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"', { stdio: 'inherit' });
         execSync('unzip awscliv2.zip', { stdio: 'inherit' });
         execSync('sudo ./aws/install', { stdio: 'inherit' });
