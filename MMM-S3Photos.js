@@ -51,7 +51,7 @@ Module.register("MMM-S3Photos", {
         this.moduleLoaded = false;
         this.sortedPhotos = null;
         this.currentIndex = 0;
-        this.imagesDisplayed = 0;  // Add counter for total images displayed
+        this.imagesDisplayed = 0;
 
         // Set transition duration from config
         const wrapper = document.getElementById(this.identifier);
@@ -233,7 +233,25 @@ Module.register("MMM-S3Photos", {
     getDom: function() {
         const wrapper = document.createElement("div");
         wrapper.className = `MMM-S3Photos ${this.config.displayStyle}`;
-        
+
+        // Show a spinner while photos are still being downloaded from S3
+        if (!this.loaded) {
+            const loading = document.createElement("div");
+            loading.className = "s3photos-loading";
+
+            const spinner = document.createElement("div");
+            spinner.className = "s3photos-spinner";
+
+            const msg = document.createElement("p");
+            msg.className = "s3photos-loading-msg";
+            msg.textContent = "Downloading data from S3, this may take some time depending on photo/video volume.";
+
+            loading.appendChild(spinner);
+            loading.appendChild(msg);
+            wrapper.appendChild(loading);
+            return wrapper;
+        }
+
         // Handle absolute sizing
         if (this.config.displayStyle === "absolute" && this.config.absoluteOptions?.enabled) {
             const size = this.config.absoluteOptions.size || 400;

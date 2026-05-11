@@ -151,6 +151,12 @@ You should be fine using the default setup until 2028 (the EOL date for Node.js 
 
 ### Common Issues
 
+**No photos displayed on initial load**
+
+On first load (immediately after boot), the module connects to Lambda to request a full manifest of files that should be in the local cache, then downloads any missing files. If you have a large library and this is your first time running the module, expect it to take several minutes to complete the initial download — this is normal.
+
+Subsequent (differential) updates run silently in the background and should have no noticeable delay. However, if you power off the MagicMirror and make large changes to your S3 library while it is off, you may see a similar delay on the next boot while the module re-syncs the cache.
+
 **Clock hard to read**
 
 Add this to your ~/MagicMirror/css/custom.css file:
