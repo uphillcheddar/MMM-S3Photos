@@ -45,13 +45,14 @@ Module.register("MMM-S3Photos", {
     start: function() {
         Log.info("Starting module: " + this.name);
         this.photos = [];
-        this.displayedPhotos = new Set();
         this.cacheDir = 'cache';
         this.loaded = false;
         this.moduleLoaded = false;
         this.sortedPhotos = null;
         this.currentIndex = 0;
         this.imagesDisplayed = 0;
+        this.dedupeQueue = this._loadDedupeQueue();
+        this.shownKeys = this._loadShownKeys();
 
         // Set transition duration from config
         const wrapper = document.getElementById(this.identifier);
@@ -84,6 +85,9 @@ Module.register("MMM-S3Photos", {
         videoCurrent.style.display = "none";
         videoCurrent.preload = this.config.video.preload;
         videoCurrent.muted = this.config.video.muted;
+        // muted IDL property doesn't reflect to the DOM attribute, so cloneNode(true)
+        // would produce an unmuted clone and Chromium's autoplay policy blocks play().
+        if (this.config.video.muted) videoCurrent.setAttribute("muted", "");
         videoCurrent.controls = this.config.video.controls;
         
         return { photoBack, photoCurrent, videoCurrent };
@@ -180,6 +184,8 @@ Module.register("MMM-S3Photos", {
                         this.photos.sort((a, b) => new Date(b.lastModified) - new Date(a.lastModified));
                     } else if (this.config.displayOrder === "oldest_first") {
                         this.photos.sort((a, b) => new Date(a.lastModified) - new Date(b.lastModified));
+                    } else if (this.config.displayOrder === "random_dedupe") {
+                        this._reconcileDedupeQueue();
                     }
                     
                     this.errorMessage = null;
@@ -404,7 +410,11 @@ Module.register("MMM-S3Photos", {
             videoElement.style.objectFit = this.config.displayStyle === "wallpaper" || this.config.displayStyle === "fill" ? 'cover' : 'contain';
         }
         
+        if (this.config.video.muted) videoElement.setAttribute("muted", "");
+        else videoElement.removeAttribute("muted");
+
         const newVideoElement = videoElement.cloneNode(true);
+        newVideoElement.muted = this.config.video.muted;
         videoElement.parentNode.replaceChild(newVideoElement, videoElement);
         
         newVideoElement.addEventListener('loadeddata', () => {
@@ -479,11 +489,14 @@ Module.register("MMM-S3Photos", {
                 if (photoBack) {
                     photoBack.style.backgroundImage = `url(${hidden.src})`;
                 }
-                
+
                 // Then set front layer
                 requestAnimationFrame(() => {
+                    // Reset the fade-in animation so it replays on every image swap
+                    photoCurrent.classList.remove('animated');
+                    void photoCurrent.offsetWidth; // force reflow to restart animation
                     photoCurrent.style.backgroundImage = `url(${hidden.src})`;
-                    
+
                     // Set background sizing
                     if (this.config.displayStyle === "absolute") {
                         photoCurrent.style.backgroundSize = "100% 100%";
@@ -492,10 +505,12 @@ Module.register("MMM-S3Photos", {
                     } else {
                         photoCurrent.style.backgroundSize = "contain";
                     }
-    
+
+                    photoCurrent.classList.add('animated');
+
                     // Update attribution immediately for all images
                     this.updateAttribution(photo, wrapper);
-    
+
                     this.imagesDisplayed++;
                 });
             }
@@ -550,34 +565,25 @@ Module.register("MMM-S3Photos", {
     
         let nextIndex;
         switch (this.config.displayOrder) {
-            case "random_dedupe":
-                // Initialize tracking Set if it doesn't exist
-                if (!this.shownPhotos) {
-                    console.log("Initializing shown media tracking");
-                    this.shownPhotos = new Set();
+            case "random_dedupe": {
+                if (this.dedupeQueue.length === 0) {
+                    console.log("Dedupe queue exhausted, re-shuffling all media");
+                    this.shownKeys = new Set();
+                    this._saveShownKeys();
+                    this.dedupeQueue = this._shuffle(this.photos.map(p => p.key));
+                    this._saveDedupeQueue();
                 }
-    
-                // Get array of available (unshown) indices
-                const availableIndices = Array.from(Array(this.photos.length).keys())
-                    .filter(i => !this.shownPhotos.has(i));
-                
-                console.log("Available media:", availableIndices.length, "Total media:", this.photos.length);
-                
-                // If no media are available, reset tracking
-                if (availableIndices.length === 0) {
-                    console.log("All media shown, resetting tracking");
-                    this.shownPhotos.clear();
-                    // Recalculate available indices
-                    nextIndex = Math.floor(Math.random() * this.photos.length);
-                } else {
-                    // Pick random media from available indices
-                    const randomAvailable = Math.floor(Math.random() * availableIndices.length);
-                    nextIndex = availableIndices[randomAvailable];
-                }
-                
-                console.log("Selected new media index:", nextIndex);
-                this.shownPhotos.add(nextIndex);
+
+                const nextKey = this.dedupeQueue.shift();
+                this.shownKeys.add(nextKey);
+                this._saveShownKeys();
+                this._saveDedupeQueue();
+
+                const foundIdx = this.photos.findIndex(p => p.key === nextKey);
+                nextIndex = foundIdx !== -1 ? foundIdx : Math.floor(Math.random() * this.photos.length);
+                console.log("Dedupe selected:", nextKey, "queue remaining:", this.dedupeQueue.length);
                 break;
+            }
             case "random":
                 nextIndex = Math.floor(Math.random() * this.photos.length);
                 break;
@@ -600,6 +606,72 @@ Module.register("MMM-S3Photos", {
         if (moduleWrapper) {
             this.displayMedia(nextMedia, moduleWrapper);
         }
+    },
+
+    _loadDedupeQueue: function() {
+        try {
+            const saved = localStorage.getItem('MMM-S3Photos_dedupeQueue');
+            if (saved) {
+                const parsed = JSON.parse(saved);
+                if (Array.isArray(parsed)) return parsed;
+            }
+        } catch (e) { /* ignore */ }
+        return [];
+    },
+
+    _saveDedupeQueue: function() {
+        try {
+            localStorage.setItem('MMM-S3Photos_dedupeQueue', JSON.stringify(this.dedupeQueue));
+        } catch (e) { /* ignore */ }
+    },
+
+    _loadShownKeys: function() {
+        try {
+            const saved = localStorage.getItem('MMM-S3Photos_shownKeys');
+            if (saved) {
+                const parsed = JSON.parse(saved);
+                if (Array.isArray(parsed)) return new Set(parsed);
+            }
+        } catch (e) { /* ignore */ }
+        return new Set();
+    },
+
+    _saveShownKeys: function() {
+        try {
+            localStorage.setItem('MMM-S3Photos_shownKeys', JSON.stringify([...this.shownKeys]));
+        } catch (e) { /* ignore */ }
+    },
+
+    _shuffle: function(arr) {
+        const a = arr.slice();
+        for (let i = a.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [a[i], a[j]] = [a[j], a[i]];
+        }
+        return a;
+    },
+
+    // Called whenever this.photos changes in random_dedupe mode.
+    // - Drops keys no longer in the photo list (deleted assets).
+    // - Appends newly discovered keys (shuffled) so they appear in the current cycle.
+    _reconcileDedupeQueue: function() {
+        const allKeys = new Set(this.photos.map(p => p.key));
+
+        // Drop removed assets from both structures
+        this.dedupeQueue = this.dedupeQueue.filter(k => allKeys.has(k));
+        this.shownKeys = new Set([...this.shownKeys].filter(k => allKeys.has(k)));
+
+        // Only treat keys as new if they are not queued AND not already shown this cycle
+        const queued = new Set(this.dedupeQueue);
+        const newKeys = this.photos.map(p => p.key).filter(k => !queued.has(k) && !this.shownKeys.has(k));
+
+        if (newKeys.length > 0) {
+            console.log(`Dedupe: appending ${newKeys.length} new asset(s) to queue`);
+            this.dedupeQueue = this._shuffle(newKeys).concat(this.dedupeQueue);
+        }
+
+        this._saveDedupeQueue();
+        this._saveShownKeys();
     },
 
     suspend: function() {
