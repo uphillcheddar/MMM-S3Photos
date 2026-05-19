@@ -59,7 +59,6 @@ const promptInstallTool = async (toolName, installFn) => {
 
 const checkRequiredTools = async () => {
     if (!isCommandAvailable('aws')) await promptInstallTool('AWS CLI', installAwsCli);
-    if (!isCommandAvailable('cdk')) await promptInstallTool('AWS CDK', installAwsCdk);
 };
 
 const installAwsCli = () => {
@@ -79,73 +78,6 @@ const installAwsCli = () => {
         execSync('sudo installer -pkg AWSCLIV2.pkg -target /', { stdio: 'inherit' });
         fs.rmSync('AWSCLIV2.pkg', { force: true });
     }
-};
-
-const installAwsCdk = () => {
-    console.log('Installing AWS CDK globally...');
-    execSync('npm install -g aws-cdk', { stdio: 'inherit' });
-};
-
-const checkCdkVersionAndPrompt = async () => {
-    let cliVersion = 'unknown';
-    let libVersion = 'unknown';
-
-    try {
-        cliVersion = execSync('cdk --version').toString().trim().split(' ')[0];
-    } catch {
-        return;
-    }
-
-    try {
-        libVersion = require('aws-cdk-lib/package.json').version;
-    } catch (e) {
-        console.error('Unable to determine CDK library version.');
-        throw e;
-    }
-
-    const isIncompatible = cliVersion.startsWith('2.') && libVersion.startsWith('2.') && !cliVersion.startsWith('2.100');
-    if (isIncompatible) {
-        console.log('\x1b[33m⚠️  CDK CLI and library versions are incompatible!\x1b[0m\n');
-        console.log(`Detected CLI: ${cliVersion} | Required lib: ${libVersion}`);
-
-        const { cdkVersionChoice } = await inquirer.prompt([
-            {
-                type: 'list',
-                name: 'cdkVersionChoice',
-                message: 'Choose how to proceed:',
-                choices: [
-                    { name: 'Abort install and exit', value: 'abort' },
-                    { name: 'Show update command and exit', value: 'show' },
-                    { name: 'Automatically update global CDK CLI to match', value: 'auto' }
-                ]
-            }
-        ]);
-
-        if (cdkVersionChoice === 'abort') {
-            console.log('Aborting setup.');
-            process.exit(1);
-        } else if (cdkVersionChoice === 'show') {
-            console.log(`Run: \x1b[32msudo npm install -g aws-cdk@${libVersion}\x1b[0m`);
-            process.exit(1);
-        } else if (cdkVersionChoice === 'auto') {
-            try {
-                const cliTargetVersion = getCompatibleCdkCliVersion(libVersion);
-                execSync(`npm install -g aws-cdk@${cliTargetVersion}`, { stdio: 'inherit' });
-
-            } catch (e) {
-                console.error('\x1b[31mCDK CLI upgrade failed. Try manually with sudo.\x1b[0m');
-                console.log(`sudo npm install -g aws-cdk@${libVersion}`);
-                process.exit(1);
-            }
-        }
-    }
-};
-const getCompatibleCdkCliVersion = (libVersion) => {
-    const [major, minor] = libVersion.split('.').map(Number);
-    if (major === 2 && minor >= 179) {
-        return 'latest'; // post-split CLI
-    }
-    return libVersion; // pre-split, still in sync
 };
 
 const questions = [
@@ -291,10 +223,11 @@ const deployInfrastructure = async (credentials) => {
 
     if (!loadEnv(true)) throw new Error('Failed to load environment variables');
 
+    const cdkBin = path.join(__dirname, 'node_modules', '.bin', 'cdk');
     const bootstrapStackName = 'mmm-s3photos-bootstrap';
 
     try {
-        execSync(`cdk bootstrap aws://${credentials.accountId}/${credentials.region} --toolkit-stack-name ${bootstrapStackName} --qualifier mmm`, {
+        execSync(`"${cdkBin}" bootstrap aws://${credentials.accountId}/${credentials.region} --toolkit-stack-name ${bootstrapStackName} --qualifier mmm`, {
             stdio: 'inherit',
             env: process.env
         });
@@ -304,7 +237,7 @@ const deployInfrastructure = async (credentials) => {
     }
 
     console.log('Deploying CDK stack...');
-    execSync(`cdk deploy S3PhotosStack --toolkit-stack-name ${bootstrapStackName} --require-approval never`, {
+    execSync(`"${cdkBin}" deploy S3PhotosStack --toolkit-stack-name ${bootstrapStackName} --require-approval never`, {
         stdio: 'inherit',
         env: process.env
     });
@@ -405,7 +338,6 @@ const main = async () => {
         }
 
         await checkRequiredTools();
-        await checkCdkVersionAndPrompt();
 
         const answers = await inquirer.prompt(questions);
         if (!answers.hasAwsAccount) {
