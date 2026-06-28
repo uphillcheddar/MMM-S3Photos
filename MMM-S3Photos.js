@@ -46,7 +46,7 @@ Module.register("MMM-S3Photos", {
     },
 
     start: function() {
-        Log.info("Starting module: " + this.name);
+        Log.debug("Starting module: " + this.name);
         this.photos = [];
         this.cacheDir = 'cache';
         this.loaded = false;
@@ -95,11 +95,11 @@ Module.register("MMM-S3Photos", {
 
     notificationReceived: function(notification, payload, sender) {
         if (notification === "ALL_MODULES_STARTED") {
-            Log.info(this.name + " received ALL_MODULES_STARTED notification");
+            Log.debug(this.name + " received ALL_MODULES_STARTED notification");
             this.moduleLoaded = true;
             this.initialize();
         } else if (notification === "GPHOTO_UPLOAD" && this.config.selfieUploads) {
-            Log.info("Received new photo notification:");
+            Log.debug("Received new photo notification:");
             this.sendSocketNotification("NEW_PHOTO", {
                 path: payload,
                 folder: this.config.selfieFolder
@@ -110,7 +110,7 @@ Module.register("MMM-S3Photos", {
     },
 
     initialize: function() {
-        Log.info(this.name + " initializing...");
+        Log.debug(this.name + " initializing...");
         
         // Ensure we have valid configuration
         if (!this.config.syncTimeHours || this.config.syncTimeHours < 1) {
@@ -129,14 +129,14 @@ Module.register("MMM-S3Photos", {
 
         // Only set up cache cleanup if enabled
         if (this.config.cacheLifeDays > 0) {
-            Log.info(this.name + " setting up cache cleanup interval");
+            Log.debug(this.name + " setting up cache cleanup interval");
             setInterval(() => {
                 this.cleanupCache().catch(err => {
                     Log.error("Error during cache cleanup:", err);
                 });
             }, this.config.cacheLifeDays * 86400000);
         } else {
-            Log.info(this.name + " cache cleanup disabled");
+            Log.debug(this.name + " cache cleanup disabled");
         }
     },
 
@@ -146,7 +146,7 @@ Module.register("MMM-S3Photos", {
             return;
         }
         
-        Log.info("Requesting photos from node helper");
+        Log.debug("Requesting photos from node helper");
         this.sendSocketNotification("GET_PHOTOS", { 
             cacheDir: this.cacheDir,
             moduleName: this.name
@@ -159,14 +159,14 @@ Module.register("MMM-S3Photos", {
             return;
         }
 
-        Log.info(this.name + " received socket notification:", notification);
+        Log.debug(this.name + " received socket notification:", notification);
         
         // Only handle PHOTOS_UPDATED and PHOTOS_ERROR notifications here
         // These are display-specific notifications that won't create loops
         switch(notification) {
             case "PHOTOS_UPDATED":
                 if (Array.isArray(payload) && payload.length > 0) {
-                    Log.info("Received photos array with length:", payload.length);
+                    Log.debug("Received photos array with length:", payload.length);
                     
                     // Filter to videos only if configured
                     if (this.config.video.videosOnly) {
@@ -174,7 +174,7 @@ Module.register("MMM-S3Photos", {
                             const mediaType = this.getMediaType(item.key);
                             return mediaType === 'video';
                         });
-                        Log.info(`Filtered to ${this.photos.length} videos only`);
+                        Log.debug(`Filtered to ${this.photos.length} videos only`);
                     } else {
                         this.photos = payload;
                     }
@@ -226,7 +226,7 @@ Module.register("MMM-S3Photos", {
             await Promise.all(files.map(file => fs.promises.unlink(path.join(this.cacheDir, file))));
             
             // Trigger sync after cleanup
-            Log.info("Cache cleanup complete, triggering photo sync");
+            Log.debug("Cache cleanup complete, triggering photo sync");
             this.getPhotos();
         } catch (err) {
             console.error("Error during cache cleanup: " + err);
@@ -329,7 +329,7 @@ Module.register("MMM-S3Photos", {
     },
 
     displayVideo: function(video, wrapper) {
-        Log.info(`[MMM-S3Photos] Preparing to show video: ${video.key}`);
+        Log.debug(`[MMM-S3Photos] Preparing to show video: ${video.key}`);
         const videoElement = wrapper.querySelector('.video-current');
         const photoCurrent = wrapper.querySelector('.photo-current');
         const photoBack = wrapper.querySelector('.photo-back');
@@ -402,7 +402,7 @@ Module.register("MMM-S3Photos", {
 
 
     displayPhoto: function(photo, wrapper) {
-        Log.info(`[MMM-S3Photos] Preparing to show photo: ${photo.key}`);
+        Log.debug(`[MMM-S3Photos] Preparing to show photo: ${photo.key}`);
         const hidden = new Image();
         hidden.src = this.file(`cache/${photo.key}`);
         
@@ -492,7 +492,7 @@ Module.register("MMM-S3Photos", {
     },
 
     scheduleNextPhoto: function() {
-        Log.info("Scheduling next media");
+        Log.debug("Scheduling next media");
         if (this.timer) {
             clearTimeout(this.timer);
         }
@@ -510,7 +510,7 @@ Module.register("MMM-S3Photos", {
 
 
     updateMedia: function() {
-        Log.info("[MMM-S3Photos] Updating media");
+        Log.debug("[MMM-S3Photos] Updating media");
         if (!this.photos || this.photos.length === 0) {
             console.log("No media available to display");
             return;
@@ -549,7 +549,7 @@ Module.register("MMM-S3Photos", {
     
         this.currentIndex = nextIndex;
         const nextMedia = this.photos[nextIndex];
-        Log.info(`[MMM-S3Photos] Loading media: ${nextMedia.key}`);
+        Log.debug(`[MMM-S3Photos] Loading media: ${nextMedia.key}`);
     
         // Update DOM
         if (this._wrapper) {
