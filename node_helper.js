@@ -1,5 +1,5 @@
 const NodeHelper = require('node_helper');
-const { S3Client, ListObjectsV2Command, GetObjectCommand, PutObjectCommand } = require('@aws-sdk/client-s3');
+const { S3Client, GetObjectCommand, PutObjectCommand } = require('@aws-sdk/client-s3');
 const { LambdaClient, InvokeCommand } = require('@aws-sdk/client-lambda');
 const fs = require('fs');
 const fsp = require('fs').promises;
@@ -8,13 +8,41 @@ const awsCredentials = require('./utils/awsCredentials');
 const loadEnv = require('./utils/loadEnv');
 const Log = require('logger');
 
+/**
+ * Executes `fn` over every item in `items` with at most `poolLimit`
+ * concurrent invocations, matching the semantics of
+ * `Promise.all(items.map(fn))` but bounding the number of in-flight
+ * promises.
+ */
+async function asyncPool(poolLimit, items, fn) {
+    const executing = new Set();
+    const results = new Array(items.length);
+
+    for (let i = 0; i < items.length; i++) {
+        const p = Promise.resolve().then(() => fn(items[i], i));
+        results[i] = p;
+
+        if (poolLimit <= items.length) {
+            const e = p.then(() => executing.delete(e));
+            executing.add(e);
+            if (executing.size >= poolLimit) {
+                await Promise.race(executing);
+            }
+        }
+    }
+
+    return Promise.all(results);
+}
+
 module.exports = NodeHelper.create({
     start: function() {
         Log.info(`Starting node helper for module: ${this.name}`);
         this.initialized = false;
         this.initializationInProgress = false;
         this.s3Client = null;
+        this.lambdaClient = null;
         this.bucketName = null;
+        this.manifest = null;
         
         // Set up module paths
         this.moduleDir = path.resolve(__dirname);
@@ -33,42 +61,55 @@ module.exports = NodeHelper.create({
         Log.info('Module directory:', this.moduleDir);
         Log.info('Cache directory:', this.cacheDir);
 
-        // Watch for new uploads
-        const uploadFile = path.join(this.cacheDir, 'last_upload.json');
-        fs.watch(this.cacheDir, async (eventType, filename) => {
-            if (filename === 'last_upload.json' && eventType === 'change') {
-                try {
-                    const data = JSON.parse(await fsp.readFile(uploadFile, 'utf8'));
-                    if (data.newPhotos) {
-                        await this.updateManifestWithNewPhotos(data.newPhotos);
-                        this.sendSocketNotification("PHOTOS_UPDATED", await this.getPhotosFromS3());
-                        // Clean up the notification file
-                        await fsp.unlink(uploadFile);
-                    }
-                } catch (error) {
-                    Log.error('Error processing upload notification:', error);
-                }
-            }
-        });
+        // Debounce map for fs.watch events
+        const debounceTimers = new Map();
 
-        // Watch for sample deletion 
         fs.watch(this.cacheDir, async (eventType, filename) => {
-            if (filename === 'last_update.json' && eventType === 'change') {
-                try {
-                    const data = JSON.parse(await fsp.readFile(path.join(this.cacheDir, filename), 'utf8'));
-                    if (data.type === 'FILES_DELETED' && Array.isArray(data.files)) {
-                        Log.info(`Processing deletion of ${data.files.length} files`);
-                        
-                        // Trigger Lambda sync to get updated file list
-                        await this.handleGetPhotos();
-                        
-                        // Clean up notification file
-                        await fsp.unlink(path.join(this.cacheDir, filename));
-                    }
-                } catch (error) {
-                    Log.error('Error processing update notification:', error);
-                }
+            if (eventType !== 'change') return;
+
+            if (filename !== 'last_upload.json' && filename !== 'last_update.json') return;
+
+            // Clear existing timer for this file to debounce rapid events
+            if (debounceTimers.has(filename)) {
+                clearTimeout(debounceTimers.get(filename));
             }
+
+            debounceTimers.set(filename, setTimeout(async () => {
+                debounceTimers.delete(filename);
+
+                if (filename === 'last_upload.json') {
+                    try {
+                        const uploadFile = path.join(this.cacheDir, 'last_upload.json');
+                        const data = JSON.parse(await fsp.readFile(uploadFile, 'utf8'));
+                        if (data.newPhotos) {
+                            await this.updateManifestWithNewPhotos(data.newPhotos);
+                            this.sendSocketNotification("PHOTOS_UPDATED", await this.getPhotosFromS3());
+                            // Clean up the notification file
+                            await fsp.unlink(uploadFile);
+                        }
+                    } catch (error) {
+                        Log.error('Error processing upload notification:', error);
+                    }
+                }
+
+                if (filename === 'last_update.json') {
+                    try {
+                        const updateFile = path.join(this.cacheDir, 'last_update.json');
+                        const data = JSON.parse(await fsp.readFile(updateFile, 'utf8'));
+                        if (data.type === 'FILES_DELETED' && Array.isArray(data.files)) {
+                            Log.info(`Processing deletion of ${data.files.length} files`);
+
+                            // Trigger Lambda sync to get updated file list
+                            await this.handleGetPhotos();
+
+                            // Clean up notification file
+                            await fsp.unlink(updateFile);
+                        }
+                    } catch (error) {
+                        Log.error('Error processing update notification:', error);
+                    }
+                }
+            }, 50));
         });
     },
 
@@ -179,8 +220,8 @@ module.exports = NodeHelper.create({
                 throw new Error("Failed to load environment variables from local configuration");
             }
 
-            // Initialize S3 client using your existing method
-            await this.initializeS3Client();
+            // Initialize AWS clients
+            await this.initializeAwsClients();
             
             this.initialized = true;
             Log.info('Module initialization completed successfully');
@@ -293,9 +334,6 @@ module.exports = NodeHelper.create({
 
     async getPhotosFromS3() {
         try {
-            // Ensure environment is loaded before proceeding
-            await this.ensureEnvironment();
-            
             Log.info('Requesting photo manifest from Lambda');
             
             Log.info('Environment configuration:', {
@@ -304,23 +342,20 @@ module.exports = NodeHelper.create({
                 bucket: process.env.BUCKET_NAME
             });
 
-            let currentManifest = [];
+            let currentManifest = this.manifest || [];
             const manifestPath = path.join(this.cacheDir, 'photos.json');
             
             try {
-                if (fs.existsSync(manifestPath)) {
+                if (fs.existsSync(manifestPath) && !this.manifest) {
                     const manifestData = await fsp.readFile(manifestPath, 'utf8');
                     currentManifest = JSON.parse(manifestData);
+                    this.manifest = currentManifest;
                 }
             } catch (error) {
                 Log.warn('Error reading manifest:', error);
                 currentManifest = [];
+                this.manifest = null;
             }
-
-            const lambda = new LambdaClient({ 
-                region: process.env.AWS_REGION,
-                maxAttempts: 3 // Add retry logic
-            });
             
             const command = new InvokeCommand({
                 FunctionName: process.env.LAMBDA_FUNCTION_NAME,
@@ -332,7 +367,7 @@ module.exports = NodeHelper.create({
             });
 
             Log.info('Invoking Lambda function...');
-            const response = await lambda.send(command);
+            const response = await this.lambdaClient.send(command);
             
             if (response.FunctionError) {
                 const errorPayload = JSON.parse(Buffer.from(response.Payload).toString());
@@ -356,25 +391,36 @@ module.exports = NodeHelper.create({
                 try {
                     // Delete from cache directory
                     const localPath = path.join(this.cacheDir, fileToDelete.key);
-                    if (fs.existsSync(localPath)) {
+                    try {
                         await fsp.unlink(localPath);
                         Log.info(`Deleted local file: ${localPath}`);
+                    } catch (unlinkError) {
+                        if (unlinkError.code !== 'ENOENT') {
+                            throw unlinkError;
+                        }
                     }
                     
                     // Also check for the file in the root of cache dir
                     const rootPath = path.join(this.cacheDir, path.basename(fileToDelete.key));
-                    if (fs.existsSync(rootPath)) {
+                    try {
                         await fsp.unlink(rootPath);
                         Log.info(`Deleted root cache file: ${rootPath}`);
+                    } catch (unlinkError) {
+                        if (unlinkError.code !== 'ENOENT') {
+                            throw unlinkError;
+                        }
                     }
                 } catch (error) {
                     Log.error(`Error deleting file ${fileToDelete.key}:`, error);
                 }
             }
 
-            // Process downloads
-            const downloadResults = await Promise.all(
-                payload.toDownload.map(async (item) => {
+            // Process downloads with bounded concurrency
+            const CONCURRENCY_LIMIT = 6;
+            const downloadResults = await asyncPool(
+                CONCURRENCY_LIMIT,
+                payload.toDownload,
+                async (item) => {
                     try {
                         const relativePath = await this.downloadPhoto(item.key);
                         return {
@@ -387,15 +433,15 @@ module.exports = NodeHelper.create({
                         Log.error(`Failed to download photo ${item.key}:`, error);
                         return null;
                     }
-                })
+                }
             );
 
             // Filter out failed downloads
             const successfulDownloads = downloadResults.filter(result => result !== null);
 
             const updatedManifest = currentManifest
-                .filter(photo => !payload.toDelete.some(d => 
-                    d.key === photo.key || 
+                .filter(photo => !payload.toDelete.some(d =>
+                    d.key === photo.key ||
                     path.basename(d.key) === path.basename(photo.key)
                 ))
                 .concat(successfulDownloads);
@@ -404,6 +450,7 @@ module.exports = NodeHelper.create({
                 manifestPath,
                 JSON.stringify(updatedManifest, null, 2)
             );
+            this.manifest = updatedManifest;
 
             Log.info(`Manifest updated: Removed ${payload.toDelete.length} files, added ${successfulDownloads.length} files`);
             return updatedManifest;
@@ -419,6 +466,7 @@ module.exports = NodeHelper.create({
                     const cachedManifest = JSON.parse(manifestData);
                     
                     if (Array.isArray(cachedManifest) && cachedManifest.length > 0) {
+                        this.manifest = cachedManifest;
                         Log.info(`Using cached manifest with ${cachedManifest.length} photos`);
                         return cachedManifest;
                     }
@@ -447,11 +495,7 @@ module.exports = NodeHelper.create({
             // Create subdirectories if they don't exist
             await fsp.mkdir(path.dirname(localPath), { recursive: true });
             
-            const chunks = [];
-            for await (const chunk of data.Body) {
-                chunks.push(chunk);
-            }
-            const buffer = Buffer.concat(chunks);
+            const buffer = Buffer.from(await data.Body.transformToByteArray());
             
             await fsp.writeFile(localPath, buffer);
             Log.info(`Successfully downloaded ${key} to ${localPath}`);
@@ -464,20 +508,21 @@ module.exports = NodeHelper.create({
         }
     },
 
-    async initializeS3Client() {
+    async initializeAwsClients() {
         try {
             await awsCredentials.withCredentials(async () => {
-                Log.info('Initializing S3 client with:', {
+                Log.info('Initializing AWS clients with:', {
                     region: process.env.AWS_REGION,
                     bucket: process.env.BUCKET_NAME
                 });
 
                 this.s3Client = new S3Client({ region: process.env.AWS_REGION });
+                this.lambdaClient = new LambdaClient({ region: process.env.AWS_REGION, maxAttempts: 3 });
                 this.bucketName = process.env.BUCKET_NAME;
-                Log.info('S3 client initialized successfully');
+                Log.info('AWS clients initialized successfully');
             });
         } catch (error) {
-            Log.error('Failed to initialize S3 client:', error);
+            Log.error('Failed to initialize AWS clients:', error);
             throw error;
         }
     },
@@ -487,6 +532,10 @@ module.exports = NodeHelper.create({
         if (this.s3Client) {
             this.s3Client.destroy();
             this.s3Client = null;
+        }
+        if (this.lambdaClient) {
+            this.lambdaClient.destroy();
+            this.lambdaClient = null;
         }
     },
 
@@ -498,19 +547,27 @@ module.exports = NodeHelper.create({
 
         try {
             Log.info('Cleaning up cache directory');
-            const files = await fsp.readdir(this.cacheDir);
             const now = Date.now();
-            
-            await Promise.all(files.map(async (file) => {
-                const filePath = path.join(this.cacheDir, file);
-                const stats = await fsp.stat(filePath);
-                const age = now - stats.mtime.getTime();
-                
-                if (age > this.config.cacheLifeDays * 86400000) {
-                    Log.info(`Removing old cache file: ${file}`);
-                    await fsp.unlink(filePath);
-                }
-            }));
+        
+            // Recursive helper to walk directories and delete stale files
+            const walkAndClean = async (dir) => {
+                const entries = await fsp.readdir(dir, { withFileTypes: true });
+                await Promise.all(entries.map(async (entry) => {
+                    const entryPath = path.join(dir, entry.name);
+                    if (entry.isDirectory()) {
+                        await walkAndClean(entryPath);
+                    } else {
+                        const stats = await fsp.stat(entryPath);
+                        const age = now - stats.mtime.getTime();
+                        if (age > this.config.cacheLifeDays * 86400000) {
+                            Log.info(`Removing old cache file: ${entryPath}`);
+                            await fsp.unlink(entryPath);
+                        }
+                    }
+                }));
+            };
+        
+            await walkAndClean(this.cacheDir);
 
             Log.info('Cache cleanup complete, triggering photo sync');
             this.sendSocketNotification('GET_PHOTOS', {
@@ -556,14 +613,7 @@ module.exports = NodeHelper.create({
 
             // Update the manifest
             const manifestPath = path.join(this.cacheDir, 'photos.json');
-            let manifest = [];
-            
-            try {
-                const manifestData = await fsp.readFile(manifestPath, 'utf8');
-                manifest = JSON.parse(manifestData);
-            } catch (error) {
-                Log.warn('Error reading manifest, starting fresh:', error);
-            }
+            let manifest = this.manifest || [];
 
             // Add new photo to manifest
             manifest.push({
@@ -574,7 +624,8 @@ module.exports = NodeHelper.create({
             });
 
             await fsp.writeFile(manifestPath, JSON.stringify(manifest, null, 2));
-            
+            this.manifest = manifest;
+
             // Notify front end of update
             this.sendSocketNotification('PHOTOS_UPDATED', manifest);
 
@@ -607,31 +658,21 @@ module.exports = NodeHelper.create({
     async updateManifestWithNewPhotos(newPhotos) {
         try {
             const manifestPath = path.join(this.cacheDir, 'photos.json');
-            let currentManifest = [];
-            
-            // Read existing manifest if it exists
-            try {
-                const manifestData = await fsp.readFile(manifestPath, 'utf8');
-                currentManifest = JSON.parse(manifestData);
-            } catch (error) {
-                Log.warn('Starting with empty manifest');
-            }
+            let currentManifest = this.manifest || [];
 
-            // Add new photos to manifest
-            const updatedManifest = [
-                ...currentManifest,
-                ...newPhotos.filter(newPhoto => 
-                    !currentManifest.some(existing => existing.key === newPhoto.key)
-                )
-            ];
+            // Build a Set of existing keys for O(1) deduplication
+            const existingKeys = new Set(currentManifest.map(p => p.key));
+            const toAdd = newPhotos.filter(p => !existingKeys.has(p.key));
+            const updatedManifest = currentManifest.concat(toAdd);
 
             // Write updated manifest
             await fsp.writeFile(
                 manifestPath,
                 JSON.stringify(updatedManifest, null, 2)
             );
+            this.manifest = updatedManifest;
 
-            Log.info(`Manifest updated with ${newPhotos.length} new photos`);
+            Log.info(`Manifest updated with ${toAdd.length} new photos`);
         } catch (error) {
             Log.error('Error updating manifest:', error);
             throw error;

@@ -1,3 +1,6 @@
+const VIDEO_EXTS = new Set(['mp4', 'webm', 'ogg', 'mov', 'avi', 'mkv', 'm4v']);
+const IMAGE_EXTS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg']);
+
 Module.register("MMM-S3Photos", {
     defaults: {
         syncTimeHours: 1, // How often to run the Lambda function and run the delta logic
@@ -63,11 +66,8 @@ Module.register("MMM-S3Photos", {
 
     getMediaType: function(key) {
         const ext = key.toLowerCase().split('.').pop();
-        const videoExts = ['mp4', 'webm', 'ogg', 'mov', 'avi', 'mkv', 'm4v'];
-        const imageExts = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'];
-        
-        if (videoExts.includes(ext)) return 'video';
-        if (imageExts.includes(ext)) return 'image';
+        if (VIDEO_EXTS.has(ext)) return 'video';
+        if (IMAGE_EXTS.has(ext)) return 'image';
         return 'unknown';
     },
 
@@ -181,9 +181,13 @@ Module.register("MMM-S3Photos", {
 
                     // Sort photos based on configuration
                     if (this.config.displayOrder === "newest_first") {
-                        this.photos.sort((a, b) => new Date(b.lastModified) - new Date(a.lastModified));
+                        const withTime = this.photos.map(p => ({ p, t: new Date(p.lastModified).getTime() }));
+                        withTime.sort((a, b) => b.t - a.t);
+                        this.photos = withTime.map(x => x.p);
                     } else if (this.config.displayOrder === "oldest_first") {
-                        this.photos.sort((a, b) => new Date(a.lastModified) - new Date(b.lastModified));
+                        const withTime = this.photos.map(p => ({ p, t: new Date(p.lastModified).getTime() }));
+                        withTime.sort((a, b) => a.t - b.t);
+                        this.photos = withTime.map(x => x.p);
                     } else if (this.config.displayOrder === "random_dedupe") {
                         this._reconcileDedupeQueue();
                     }
@@ -229,12 +233,6 @@ Module.register("MMM-S3Photos", {
         }
     },
 
-
-    getAttributionText: function(photoUrl) {
-        const parts = photoUrl.split('/');
-        const subfolder = parts[parts.length - 2] || '';
-        return this.config.attribution.attributions[subfolder] || "";
-    },
 
     getDom: function() {
         const wrapper = document.createElement("div");
@@ -285,11 +283,7 @@ Module.register("MMM-S3Photos", {
                     blurContainer.style.setProperty('--blur-height', 
                         `${this.config.absoluteOptions.blurContainer.height}px`);
                     
-                    // Add logging to verify the styles were set
-                    console.log('Blur container styles:', {
-                        width: blurContainer.style.getPropertyValue('--blur-width'),
-                        height: blurContainer.style.getPropertyValue('--blur-height')
-                    });
+
                 }
                 
                 const { photoBack, photoCurrent, videoCurrent } = this.createMediaElements();
@@ -306,53 +300,21 @@ Module.register("MMM-S3Photos", {
                 wrapper.appendChild(videoCurrent);
             }
         } else {
-            // Create media elements
             const { photoBack, photoCurrent, videoCurrent } = this.createMediaElements();
-            
-            // Handle absolute sizing
-            if (this.config.absoluteOptions && this.config.absoluteOptions.enabled) {
-                wrapper.classList.add('absolute');
-                const size = this.config.absoluteOptions.size || 400;
-                
-                if (this.config.absoluteOptions.side === "horizontal") {
-                    wrapper.style.width = `${size}px`;
-                    wrapper.style.height = 'auto';
-                } else {
-                    wrapper.style.height = `${size}px`;
-                    wrapper.style.width = 'auto';
-                }
-                
-                // Create blur container if needed
-                if (this.config.applyBlur) {
-                    const blurContainer = document.createElement("div");
-                    blurContainer.className = "blur-container";
-                    
-                    if (this.config.absoluteOptions.blurContainer) {
-                        if (this.config.absoluteOptions.side === "horizontal") {
-                            blurContainer.style.width = `${this.config.absoluteOptions.blurContainer.width}px`;
-                            blurContainer.style.height = 'auto';
-                        } else {
-                            blurContainer.style.height = `${this.config.absoluteOptions.blurContainer.height}px`;
-                            blurContainer.style.width = 'auto';
-                        }
-                    }
-                    
-                    blurContainer.appendChild(photoBack);
-                    blurContainer.appendChild(photoCurrent);
-                    blurContainer.appendChild(videoCurrent);
-                    wrapper.appendChild(blurContainer);
-                } else {
-                    wrapper.appendChild(photoBack);
-                    wrapper.appendChild(photoCurrent);
-                    wrapper.appendChild(videoCurrent);
-                }
-            } else {
-                wrapper.appendChild(photoBack);
-                wrapper.appendChild(photoCurrent);
-                wrapper.appendChild(videoCurrent);
-            }
+            wrapper.appendChild(photoBack);
+            wrapper.appendChild(photoCurrent);
+            wrapper.appendChild(videoCurrent);
         }
         
+        const attrContainer = document.createElement("div");
+        attrContainer.className = "attribution-container";
+        attrContainer.style.display = "none";
+        const attrText = document.createElement("div");
+        attrText.className = "attribution";
+        attrContainer.appendChild(attrText);
+        wrapper.appendChild(attrContainer);
+
+        this._wrapper = wrapper;
         return wrapper;
     },
 
@@ -367,7 +329,7 @@ Module.register("MMM-S3Photos", {
     },
 
     displayVideo: function(video, wrapper) {
-        console.log("Preparing to show video:", video.key);
+        Log.info(`[MMM-S3Photos] Preparing to show video: ${video.key}`);
         const videoElement = wrapper.querySelector('.video-current');
         const photoCurrent = wrapper.querySelector('.photo-current');
         const photoBack = wrapper.querySelector('.photo-back');
@@ -413,31 +375,23 @@ Module.register("MMM-S3Photos", {
         if (this.config.video.muted) videoElement.setAttribute("muted", "");
         else videoElement.removeAttribute("muted");
 
-        const newVideoElement = videoElement.cloneNode(true);
-        newVideoElement.muted = this.config.video.muted;
-        videoElement.parentNode.replaceChild(newVideoElement, videoElement);
-        
-        newVideoElement.addEventListener('loadeddata', () => {
-            console.log("Video loaded successfully:", video.key);
-            newVideoElement.style.display = 'block';
-            
+        videoElement.addEventListener('loadeddata', () => {
+            videoElement.style.display = 'block';
+
             this.updateAttribution(video, wrapper);
             this.imagesDisplayed++;
-            
-            // If video is shorter than display duration and not looping,
-            // schedule next media when video ends
+
             if (!this.config.video.loop) {
-                newVideoElement.addEventListener('ended', () => {
-                    console.log("Video ended, advancing to next media");
+                videoElement.addEventListener('ended', () => {
                     this.updateMedia();
                 }, { once: true });
             }
-        });
-        
-        newVideoElement.addEventListener('error', (e) => {
+        }, { once: true });
+
+        videoElement.addEventListener('error', (e) => {
             console.error("Video failed to load:", video.key, e);
             this.updateMedia();
-        });
+        }, { once: true });
         
         // Set up timer for next media (in case video is longer than display duration or loops)
         if (this.timer) clearTimeout(this.timer);
@@ -448,10 +402,9 @@ Module.register("MMM-S3Photos", {
 
 
     displayPhoto: function(photo, wrapper) {
-        console.log("Preparing to show photo:", photo.key);
+        Log.info(`[MMM-S3Photos] Preparing to show photo: ${photo.key}`);
         const hidden = new Image();
         hidden.src = this.file(`cache/${photo.key}`);
-        console.log("Full image URL:", hidden.src);
         
         const videoElement = wrapper.querySelector('.video-current');
         if (videoElement) {
@@ -557,7 +510,7 @@ Module.register("MMM-S3Photos", {
 
 
     updateMedia: function() {
-        console.log("Updating media");
+        Log.info("[MMM-S3Photos] Updating media");
         if (!this.photos || this.photos.length === 0) {
             console.log("No media available to display");
             return;
@@ -569,19 +522,16 @@ Module.register("MMM-S3Photos", {
                 if (this.dedupeQueue.length === 0) {
                     console.log("Dedupe queue exhausted, re-shuffling all media");
                     this.shownKeys = new Set();
-                    this._saveShownKeys();
                     this.dedupeQueue = this._shuffle(this.photos.map(p => p.key));
-                    this._saveDedupeQueue();
+                    this._persistState();
                 }
 
                 const nextKey = this.dedupeQueue.shift();
                 this.shownKeys.add(nextKey);
-                this._saveShownKeys();
-                this._saveDedupeQueue();
+                this._persistState();
 
                 const foundIdx = this.photos.findIndex(p => p.key === nextKey);
                 nextIndex = foundIdx !== -1 ? foundIdx : Math.floor(Math.random() * this.photos.length);
-                console.log("Dedupe selected:", nextKey, "queue remaining:", this.dedupeQueue.length);
                 break;
             }
             case "random":
@@ -599,12 +549,11 @@ Module.register("MMM-S3Photos", {
     
         this.currentIndex = nextIndex;
         const nextMedia = this.photos[nextIndex];
-        console.log("Loading media:", nextMedia.key);
+        Log.info(`[MMM-S3Photos] Loading media: ${nextMedia.key}`);
     
         // Update DOM
-        const moduleWrapper = document.getElementById(this.identifier);
-        if (moduleWrapper) {
-            this.displayMedia(nextMedia, moduleWrapper);
+        if (this._wrapper) {
+            this.displayMedia(nextMedia, this._wrapper);
         }
     },
 
@@ -642,6 +591,14 @@ Module.register("MMM-S3Photos", {
         } catch (e) { /* ignore */ }
     },
 
+    _persistState: function() {
+        if (this._persistTimer) clearTimeout(this._persistTimer);
+        this._persistTimer = setTimeout(() => {
+            this._saveDedupeQueue();
+            this._saveShownKeys();
+        }, 500);
+    },
+
     _shuffle: function(arr) {
         const a = arr.slice();
         for (let i = a.length - 1; i > 0; i--) {
@@ -655,7 +612,8 @@ Module.register("MMM-S3Photos", {
     // - Drops keys no longer in the photo list (deleted assets).
     // - Appends newly discovered keys (shuffled) so they appear in the current cycle.
     _reconcileDedupeQueue: function() {
-        const allKeys = new Set(this.photos.map(p => p.key));
+        const allKeysList = this.photos.map(p => p.key);
+        const allKeys = new Set(allKeysList);
 
         // Drop removed assets from both structures
         this.dedupeQueue = this.dedupeQueue.filter(k => allKeys.has(k));
@@ -663,7 +621,7 @@ Module.register("MMM-S3Photos", {
 
         // Only treat keys as new if they are not queued AND not already shown this cycle
         const queued = new Set(this.dedupeQueue);
-        const newKeys = this.photos.map(p => p.key).filter(k => !queued.has(k) && !this.shownKeys.has(k));
+        const newKeys = allKeysList.filter(k => !queued.has(k) && !this.shownKeys.has(k));
 
         if (newKeys.length > 0) {
             console.log(`Dedupe: appending ${newKeys.length} new asset(s) to queue`);
@@ -683,52 +641,35 @@ Module.register("MMM-S3Photos", {
     },
 
     updateAttribution: function(photo, wrapper) {
-        // Remove existing attributions
-        const existingAttributions = wrapper.querySelectorAll('.attribution-container');
-        Array.from(existingAttributions).forEach(attribution => attribution.remove());
+        const attrContainer = wrapper.querySelector('.attribution-container');
+        const attrText = wrapper.querySelector('.attribution');
+        const folder = photo.key.split('/')[0];
+        const text = this.config.attribution?.enabled && this.config.attribution.attributions[folder];
 
-        // Add new attribution if enabled
-        if (this.config.attribution && this.config.attribution.enabled) {
-            const folder = photo.key.split('/')[0];
-            const text = this.config.attribution.attributions[folder];
-            
-            if (text) {
-                const attributionContainer = document.createElement("div");
-                attributionContainer.className = "attribution-container";
-                attributionContainer.setAttribute('data-relative', 
-                    this.config.attribution.relativeTo || 'display');
-                
-                const attribution = document.createElement("div");
-                attribution.className = "attribution";
-                attribution.textContent = text;
+        if (text && attrContainer && attrText) {
+            attrText.textContent = text;
+            attrContainer.className = "attribution-container";
+            attrContainer.setAttribute('data-relative', this.config.attribution.relativeTo || 'display');
 
-                if (this.config.attribution.position === "dynamic") {
-                    if (!this.currentCorner) {
-                        this.currentCorner = "top-left";
-                    } else {
-                        switch (this.currentCorner) {
-                            case "top-left":
-                                this.currentCorner = "top-right";
-                                break;
-                            case "top-right":
-                                this.currentCorner = "bottom-right";
-                                break;
-                            case "bottom-right":
-                                this.currentCorner = "bottom-left";
-                                break;
-                            case "bottom-left":
-                                this.currentCorner = "top-left";
-                                break;
-                        }
-                    }
-                    attributionContainer.classList.add(this.currentCorner);
+            if (this.config.attribution.position === "dynamic") {
+                if (!this.currentCorner) {
+                    this.currentCorner = "top-left";
                 } else {
-                    attributionContainer.classList.add(this.config.attribution.corner || "bottom-right");
+                    switch (this.currentCorner) {
+                        case "top-left": this.currentCorner = "top-right"; break;
+                        case "top-right": this.currentCorner = "bottom-right"; break;
+                        case "bottom-right": this.currentCorner = "bottom-left"; break;
+                        case "bottom-left": this.currentCorner = "top-left"; break;
+                    }
                 }
-
-                attributionContainer.appendChild(attribution);
-                wrapper.appendChild(attributionContainer);
+                attrContainer.classList.add(this.currentCorner);
+            } else {
+                attrContainer.classList.add(this.config.attribution.corner || "bottom-right");
             }
+
+            attrContainer.style.display = "block";
+        } else if (attrContainer) {
+            attrContainer.style.display = "none";
         }
     }
 
